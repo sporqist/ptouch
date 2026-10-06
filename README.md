@@ -272,6 +272,22 @@ printer.print_multi(labels)
 printer.print_multi(labels, half_cut=False)
 ```
 
+### Printer Status (network printers)
+
+Network P-touch printers do not answer status requests on the print port,
+but they publish the same 32-byte status block over SNMP. Read it before
+printing to check the loaded tape and error flags:
+
+```python
+from ptouch.snmp import read_status
+
+status = read_status("192.168.1.101")
+print(status.tape)          # "24 mm laminated tape, black on white"
+print(status.has_error, status.errors, status.is_printing)
+```
+
+Verified on a PT-E550W. Needs SNMP v1 with the default community `public`.
+
 ### Alignment Options
 
 Text alignment can be combined using the `|` operator:
