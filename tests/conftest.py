@@ -14,6 +14,7 @@ from ptouch import (
     Tape36mm,
 )
 from ptouch.connection import Connection
+from ptouch.packbits import decode
 
 
 class MockConnection(Connection):
@@ -84,3 +85,59 @@ def tape_24mm() -> Tape24mm:
 def tape_36mm() -> Tape36mm:
     """Provide a 36mm tape instance."""
     return Tape36mm()
+
+
+# ---- reading a print job back as a list of commands ------------------------
+
+_ESC_I_SIZES = {b"a": 1, b"z": 10, b"M": 1, b"A": 1, b"K": 1, b"d": 2}
+
+
+def _raster_run(data: bytes, i: int) -> tuple[int, int, int]:
+    """Consume raster lines from i; return (next index, lines, longest block)."""
+    lines = longest = 0
+    while i < len(data) and data[i] in (0x47, 0x5A):
+        if data[i] == 0x5A:
+            i += 1
+        else:
+            n = data[i + 1] | data[i + 2] << 8
+            assert len(decode(data[i + 3 : i + 3 + n])) == 16, f"bad raster line at {i}"
+            longest = max(longest, n)
+            i += 3 + n
+        lines += 1
+    return i, lines, longest
+
+
+def _one_command(data: bytes, i: int) -> tuple[int, tuple[str, str]]:
+    """Parse the command at i; return (next index, (name, value))."""
+    if data[i] == 0x00:
+        j = i
+        while j < len(data) and data[j] == 0x00:
+            j += 1
+        return j, ("invalidate", f"{j - i} x 00")
+    if data[i : i + 2] == b"@":
+        return i + 2, ("initialize", "1b 40")
+    if data[i : i + 2] == b"i":
+        n = _ESC_I_SIZES[data[i + 2 : i + 3]]
+        return i + 3 + n, ("ESC i " + chr(data[i + 2]), data[i + 3 : i + 3 + n].hex(" "))
+    if data[i] == 0x4D:
+        return i + 2, ("compression", f"{data[i + 1]:02x}")
+    if data[i] in (0x47, 0x5A):
+        j, lines, longest = _raster_run(data, i)
+        size = "all blocks <= 17 bytes" if longest <= 17 else f"a block of {longest} bytes"
+        return j, ("raster", f"{lines} lines, {size}")
+    if data[i] in (0x0C, 0x1A):
+        return i + 1, ("print" if data[i] == 0x0C else "print + feed", f"{data[i]:02x}")
+    raise AssertionError(f"unexpected byte {data[i]:#04x} at {i}")
+
+
+def job_commands(data: bytes) -> list[tuple[str, str]]:
+    """Read a raster print job back as readable (command, value) pairs.
+
+    Raster lines between two commands are summarised as one entry.
+    """
+    out: list[tuple[str, str]] = []
+    i = 0
+    while i < len(data):
+        i, cmd = _one_command(data, i)
+        out.append(cmd)
+    return out

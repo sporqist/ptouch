@@ -64,6 +64,18 @@ Comprehensive documentation is available at [ptouch.readthedocs.io](https://ptou
 
 > **Note:** The PT-P710BT is a basic consumer model and does **not** support half-cut or heat shrink tubes. Its firmware ignores the half-cut command, so use `--full-cut` for multi-label jobs to get a cut between labels.
 
+#### Verified on hardware
+
+Printer models and settings that have been printed on a real device and
+checked by eye. Everything else is implemented from Brother's raster
+command references but untested on hardware here. The tests in
+`TestE550WVerifiedJobs` (`tests/test_printer.py`) pin the verified
+command sequences; changing them needs a new hardware check.
+
+| Printer | Firmware | Tape | Verified | What |
+|---------|----------|------|----------|------|
+| PT-E550W | FP-MAIN 1.31 | TZe-S251 (24mm) | 2026-10-06 | single label; two-label half-cut strip (`print_multi`); PackBits compression; over the network (port 9100) |
+
 ### Tapes
 
 | Type | Widths | Class | Notes |

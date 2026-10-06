@@ -19,7 +19,7 @@ from ptouch.tape import (
     Tape36mm,
 )
 
-from .conftest import MockConnection
+from .conftest import MockConnection, job_commands
 
 
 class TestMediaType:
@@ -896,3 +896,66 @@ class TestHalfCutDefault:
         conn = MockConnection()
         PTE550W(conn).print(Label(Image.new("RGB", (20, 128), "white"), Tape24mm), half_cut=True)
         assert self._advanced_modes(conn.data) == [0x0C]
+
+
+class TestE550WVerifiedJobs:
+    """Command sequences printed and checked on a real PT-E550W.
+
+    Verified 2026-10-06: PT-E550W, main firmware FP-MAIN 1.31, TZe-S251
+    (24 mm). The single label printed with a full cut at the end; the
+    two-label strip came out as one piece (lead, half cut, label, half
+    cut, label, full cut). Image content does not matter for these
+    settings, so a plain test image is used. Changing any expected
+    command below needs a new hardware check (see README).
+    """
+
+    @staticmethod
+    def _label() -> Label:
+        # A busy pattern, so raster lines need both PackBits runs and the
+        # 17-byte literal fallback.
+        image = Image.new("RGB", (84, 128), "white")
+        for x in range(84):
+            for y in range(128):
+                if (x * 7 + y * 3 + (x * y) % 5) % 4 < 2:
+                    image.putpixel((x, y), (0, 0, 0))
+        return Label(image, Tape24mm)
+
+    def test_single_label(self, mock_connection: MockConnection) -> None:
+        """One label: auto cut, cut each label, no half cut, feed at the end."""
+        PTE550W(mock_connection).print(self._label())
+        assert job_commands(mock_connection.data) == [
+            ("invalidate", "100 x 00"),
+            ("initialize", "1b 40"),
+            ("ESC i a", "01"),  # raster mode
+            ("ESC i z", "86 01 18 00 54 00 00 00 00 00"),  # laminated, 24 mm, 84 lines, page 0
+            ("ESC i M", "40"),  # auto cut
+            ("ESC i A", "01"),  # cut each label
+            ("ESC i K", "08"),  # no chain printing
+            ("ESC i d", "0e 00"),  # 14-dot margin
+            ("compression", "02"),  # TIFF / PackBits
+            ("raster", "84 lines, all blocks <= 17 bytes"),
+            ("print + feed", "1a"),
+        ]
+
+    def test_half_cut_strip(self, mock_connection: MockConnection) -> None:
+        """Two labels: auto cut off, half cut, later page marked, one feed."""
+        PTE550W(mock_connection).print_multi([self._label(), self._label()])
+        page = [
+            ("ESC i M", "00"),  # auto cut off: half cuts between labels
+            ("ESC i K", "0c"),  # half cut + no chain printing
+            ("ESC i d", "0e 00"),
+            ("compression", "02"),
+            ("raster", "84 lines, all blocks <= 17 bytes"),
+        ]
+        assert job_commands(mock_connection.data) == [
+            ("invalidate", "100 x 00"),
+            ("initialize", "1b 40"),
+            ("ESC i a", "01"),
+            ("ESC i z", "86 01 18 00 54 00 00 00 00 00"),  # starting page
+            *page,
+            ("print", "0c"),
+            ("ESC i a", "01"),
+            ("ESC i z", "86 01 18 00 54 00 00 00 01 00"),  # later page
+            *page,
+            ("print + feed", "1a"),
+        ]
