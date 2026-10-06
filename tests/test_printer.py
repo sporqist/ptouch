@@ -1035,3 +1035,84 @@ class TestChainedPage:
         """Chain only drops the final cut; the last page still ends with 1A."""
         page = PTE550W(mock_connection).build_page(self._label(), chain=True, feed=True)
         assert job_commands(page)[-1] == ("print + feed", "1a")
+
+
+class TestHighResolutionImage:
+    """build_page(high_resolution_image=True): a 360 dpi image, each line once."""
+
+    @staticmethod
+    def _label(width: int = 205) -> Label:
+        image = Image.new("RGB", (width, 128), "white")
+        for x in range(0, width, 2):
+            for y in range(x % 7, 128, 5):
+                image.putpixel((x, y), (0, 0, 0))
+        return Label(image, Tape24mm)
+
+    def test_commands(self, mock_connection: MockConnection) -> None:
+        """K bit 0x40, margin 28 dots, as many lines as the image is wide."""
+        page = PTE550W(mock_connection).build_page(self._label(), high_resolution_image=True)
+        assert job_commands(page) == [
+            ("ESC i a", "01"),
+            ("ESC i z", "86 01 18 00 cd 00 00 00 00 00"),  # 205 lines, not 410
+            ("ESC i M", "40"),
+            ("ESC i A", "01"),
+            ("ESC i K", "48"),  # no chain + high resolution
+            ("ESC i d", "1c 00"),  # 28 dots = 2 mm at 360 dpi
+            ("compression", "02"),
+            ("raster", "205 lines, all blocks <= 17 bytes"),
+            ("print + feed", "1a"),
+        ]
+
+    def test_same_lines_as_normal_page(self, mock_connection: MockConnection) -> None:
+        """Only K and the margin differ from the normal-resolution page.
+
+        This is how the high-resolution labels verified on a PT-E550W
+        (2026-10-06) were made: a normal page with K | 0x40 and the
+        margin doubled, patched into the bytes.
+        """
+        printer = PTE550W(mock_connection)
+        normal = printer.build_page(self._label(), half_cut=True, auto_cut=False)
+        patched = normal.replace(b"\x1biK\x0c", b"\x1biK\x4c").replace(
+            b"\x1bid\x0e\x00", b"\x1bid\x1c\x00"
+        )
+        hires = printer.build_page(
+            self._label(), half_cut=True, auto_cut=False, high_resolution_image=True
+        )
+        assert hires == patched
+
+    def test_repeating_mode_unchanged(self, mock_connection: MockConnection) -> None:
+        """high_resolution=True still repeats every line of a normal image."""
+        page = PTE550W(mock_connection).build_page(self._label(100), high_resolution=True)
+        commands = dict(job_commands(page))
+        assert commands["ESC i z"] == "86 01 18 00 c8 00 00 00 00 00"  # 200 lines
+        assert commands["ESC i K"] == "48"
+        assert commands["ESC i d"] == "1c 00"
+        assert commands["raster"] == "200 lines, all blocks <= 17 bytes"
+
+    def test_validates(self, mock_connection: MockConnection) -> None:
+        """The validator reads the page as high resolution with a 28-dot margin."""
+        from ptouch.validate import validate_job
+
+        printer = PTE550W(mock_connection)
+        summary = validate_job(
+            printer.build_page(self._label(), high_resolution_image=True), printer
+        )
+        (page,) = summary.pages
+        assert page.high_resolution and page.margin_dots == 28 and page.raster_lines == 205
+
+    def test_conflicting_flags(self, mock_connection: MockConnection) -> None:
+        """A 360 dpi image cannot be sent in normal resolution."""
+        with pytest.raises(ValueError, match="needs high resolution"):
+            PTE550W(mock_connection).build_page(
+                self._label(), high_resolution=False, high_resolution_image=True
+            )
+
+    def test_printer_without_high_resolution(self, mock_connection: MockConnection) -> None:
+        """Models without a high resolution refuse the image."""
+
+        class NoHighResolution(PTE550W):
+            RESOLUTION_DPI_HIGH = 0
+
+        printer = NoHighResolution(mock_connection)
+        with pytest.raises(ValueError, match="does not support high resolution"):
+            printer.build_page(self._label(), high_resolution_image=True)

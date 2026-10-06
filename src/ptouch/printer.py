@@ -522,6 +522,7 @@ class LabelPrinter(ABC):
         special_tape: bool = False,
         starting_page: bool = True,
         cut_each: int = 1,
+        repeat_lines: bool | None = None,
     ) -> bytes:
         """Build control sequence for a single page in a multi-page job.
 
@@ -534,7 +535,7 @@ class LabelPrinter(ABC):
         tape : Tape
             The tape/tube being used (for media type detection).
         high_resolution : bool
-            Whether to use high resolution mode.
+            Whether to use high resolution mode (ESC i K bit 6, margin doubled).
         is_first_page : bool
             Whether this is the first page (needs invalidate/initialize).
         auto_cut : bool, default True
@@ -553,16 +554,23 @@ class LabelPrinter(ABC):
         cut_each : int, default 1
             Full cut after every this many pages (ESC i A); only sent with
             auto cut.
+        repeat_lines : bool or None, optional
+            Whether every raster line is sent twice (the line count in
+            ESC i z doubles). Defaults to ``high_resolution``; False for
+            images that are already at the high resolution.
 
         Returns
         -------
         bytes
             Control sequence bytes for this page.
         """
-        # High resolution mode doubles lines and margin
+        # High resolution doubles the margin; repeated lines double the count
+        if repeat_lines is None:
+            repeat_lines = high_resolution
         if high_resolution:
-            num_lines *= 2
             margin *= 2
+        if repeat_lines:
+            num_lines *= 2
 
         control_seq = b""
 
@@ -590,7 +598,7 @@ class LabelPrinter(ABC):
         control_seq += self._cmd_set_compression(tiff_compression=self.use_compression)
         return control_seq
 
-    def _build_raster_data(self, raster: bytes, num_lines: int, high_resolution: bool) -> bytes:
+    def _build_raster_data(self, raster: bytes, num_lines: int, repeat_lines: bool) -> bytes:
         """Build raster data bytes from raw raster.
 
         Parameters
@@ -599,15 +607,15 @@ class LabelPrinter(ABC):
             Raw raster data from _generate_raster.
         num_lines : int
             Number of raster lines.
-        high_resolution : bool
-            Whether to use high resolution mode.
+        repeat_lines : bool
+            Send every line twice (high resolution from a normal image).
 
         Returns
         -------
         bytes
             Formatted raster data for the printer.
         """
-        repeat_count = 2 if high_resolution else 1
+        repeat_count = 2 if repeat_lines else 1
 
         raster_data = b""
         for i in range(num_lines):
@@ -704,6 +712,18 @@ class LabelPrinter(ABC):
             raise ValueError(f"{type(self).__name__} does not support {name}")
         return requested
 
+    def _resolve_high_resolution(
+        self, high_resolution: bool | None, high_resolution_image: bool
+    ) -> bool:
+        """Whether a page is sent in high resolution mode."""
+        if not high_resolution_image:
+            return self.high_resolution if high_resolution is None else high_resolution
+        if not self.supports_high_resolution:
+            raise ValueError(f"{type(self).__name__} does not support high resolution")
+        if high_resolution is False:
+            raise ValueError("high_resolution_image needs high resolution mode")
+        return True
+
     def _check_cut_each(self, cut_each: int, auto_cut: bool) -> None:
         """Refuse cut-each values the raster reference does not allow."""
         if isinstance(cut_each, bool) or not isinstance(cut_each, int):
@@ -726,6 +746,7 @@ class LabelPrinter(ABC):
         special_tape: bool | None = None,
         first_page: bool = True,
         cut_each: int = 1,
+        high_resolution_image: bool = False,
     ) -> bytes:
         """Build one page (label) of a print job in column-by-column raster format.
 
@@ -741,6 +762,8 @@ class LabelPrinter(ABC):
             If None, uses DEFAULT_MARGIN_MM.
         high_resolution : bool or None, optional
             Whether to use high resolution mode. If None, uses printer's setting.
+            The image is taken at the normal resolution and every raster
+            line is sent twice, so the label keeps its length.
         feed : bool, default True
             If True, sends 0x1A (print and feed).
             If False, sends 0x0C (print without feed) - used for multi-label printing.
@@ -771,6 +794,14 @@ class LabelPrinter(ABC):
             (``ESC i A n``, 1-99). Every page of a job must carry the same
             value, and a job should have a multiple of it in pages. Values
             other than 1 need auto cut.
+        high_resolution_image : bool, default False
+            The image is already at ``RESOLUTION_DPI_HIGH`` along the tape
+            (x) and at the normal resolution across it (y). The page is
+            sent in high resolution mode (ESC i K bit 6, margin doubled)
+            with every raster line once, so all of the image's detail
+            along the tape reaches the print head. Overrides
+            ``high_resolution``; passing ``high_resolution=False`` with it
+            is an error.
 
         Raises
         ------
@@ -779,10 +810,12 @@ class LabelPrinter(ABC):
             a feature (``auto_cut``, ``half_cut``, ``mirror``, ``chain``,
             ``special_tape``) is explicitly requested but the printer model
             does not support it (see the ``SUPPORTS_*`` class attributes),
-            or if ``cut_each`` is outside 1-99 or set without auto cut.
+            or if ``cut_each`` is outside 1-99 or set without auto cut, or
+            if ``high_resolution_image`` is set on a printer without high
+            resolution or together with ``high_resolution=False``.
         """
         # Resolve high_resolution setting
-        high_res = self.high_resolution if high_resolution is None else high_resolution
+        high_res = self._resolve_high_resolution(high_resolution, high_resolution_image)
 
         tape_config = self.get_tape_config(label.tape)
         label.prepare(tape_config.print_pins, self.RESOLUTION_DPI)
@@ -856,9 +889,12 @@ class LabelPrinter(ABC):
             special_tape=special_tape,
             starting_page=first_page,
             cut_each=cut_each,
+            repeat_lines=high_res and not high_resolution_image,
         )
 
-        raster_data = self._build_raster_data(raster, num_lines, high_res)
+        raster_data = self._build_raster_data(
+            raster, num_lines, repeat_lines=high_res and not high_resolution_image
+        )
 
         # Choose print command: 0x0C (print) or 0x1A (print and feed)
         print_cmd = b"\x1a" if feed else b"\x0c"

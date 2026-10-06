@@ -31,7 +31,9 @@ class PTE550W(LabelPrinter):
 
     Note: E550W requires compression ON for cutting to work.
     High resolution mode (180x360 dpi) is supported via ESC i K bit 6.
-    In high-res mode, each raster line must be sent twice and margin doubled.
+    In high-res mode the margin is doubled, and a normal-resolution image
+    has each raster line sent twice; an image already at 360 dpi along the
+    tape is sent line by line (``build_page(high_resolution_image=True)``).
     """
 
     USB_PRODUCT_ID = 0x2060
