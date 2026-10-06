@@ -133,7 +133,7 @@ class TextLabel(Label):
             )
         return self._image
 
-    def prepare(self, height: int, resolution_dpi: int = 180) -> None:
+    def prepare(self, height: int, resolution_dpi: int = 180) -> None:  # noqa: C901 - pre-existing, inherited from upstream
         """Render the text to an image.
 
         Parameters

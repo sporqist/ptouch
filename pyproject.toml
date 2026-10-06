@@ -14,7 +14,7 @@ license = "LGPL-2.1-or-later"
 license-files = ["LICENSE"]
 readme = "README.md"
 authors = [{ name = "Nicolai Buchwitz", email = "nb@tipi-net.de" }]
-maintainers = [{ name = "Nicolai Buchwitz", email = "nb@tipi-net.de" }]
+maintainers = [{ name = "Marius Alwan Meyer", email = "22202402+sporqist@users.noreply.github.com" }]
 keywords = ["brother", "p-touch", "label", "printer", "raster"]
 classifiers = [
     "Development Status :: 4 - Beta",
@@ -32,8 +32,9 @@ requires-python = ">= 3.11"
 
 [project.urls]
 Documentation = "https://ptouch.readthedocs.io/"
-Repository = "https://github.com/nbuchwitz/ptouch"
-Issues = "https://github.com/nbuchwitz/ptouch/issues"
+Repository = "https://github.com/sporqist/ptouch"
+Issues = "https://github.com/sporqist/ptouch/issues"
+Upstream = "https://github.com/nbuchwitz/ptouch"
 
 [project.optional-dependencies]
 usb = ["pyusb"]
@@ -57,14 +58,12 @@ ptouch = "ptouch.__main__:main"
 # an upstream PyPI release.
 [tool.setuptools_scm]
 
-[tool.black]
-line-length = 100
-
 [tool.ruff]
 line-length = 100
 lint.select = [
     "ANN", # flake8-annotations
     "B",   # flake8-bugbear
+    "C90", # mccabe complexity
     "D",   # pydocstyle
     "E",   # pycodestyle
     "F",   # Pyflakes
@@ -77,7 +76,7 @@ lint.ignore = [
     "ANN401", # allow Any type (needed for pyusb which lacks type stubs)
 ]
 
-[tool.lint.mccabe]
+[tool.ruff.lint.mccabe]
 max-complexity = 10
 
 [tool.ruff.lint.pydocstyle]

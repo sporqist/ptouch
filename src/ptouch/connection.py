@@ -262,7 +262,7 @@ class ConnectionUSB(Connection):
                 "`pip install ptouch[usb]` or `pip install pyusb` directly."
             )
 
-    def connect(self, printer: LabelPrinter) -> None:
+    def connect(self, printer: LabelPrinter) -> None:  # noqa: C901 - pre-existing, inherited from upstream
         """Establish USB connection to the printer.
 
         Parameters
