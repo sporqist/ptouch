@@ -16,6 +16,9 @@ Signals, both read over SNMP v1:
 - ``hrPrinterStatus`` (HOST-RESOURCES-MIB, 1.3.6.1.2.1.25.3.5.1.1.1):
   3 = idle, 4 = printing. Standard, so it works across vendors.
 - The Brother status block (see :mod:`ptouch.snmp`) for error bits.
+
+Verified on a PT-E550W (firmware 1.31): a single label read 3, then 4
+from 0.55 s to 5.8 s, then 3 again at 6.3 s.
 """
 
 from __future__ import annotations

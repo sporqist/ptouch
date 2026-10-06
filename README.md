@@ -74,7 +74,7 @@ command sequences; changing them needs a new hardware check.
 
 | Printer | Firmware | Tape | Verified | What |
 |---------|----------|------|----------|------|
-| PT-E550W | FP-MAIN 1.31 | TZe-S251 (24mm) | 2026-10-06 | single label; two-label half-cut strip (`print_multi`); PackBits compression; over the network (port 9100) |
+| PT-E550W | FP-MAIN 1.31 | TZe-S251 (24mm) | 2026-10-06 | single label; two-label half-cut strip (`print_multi`); PackBits compression; over the network (port 9100); status over SNMP; watchdog states (`hrPrinterStatus` 3 idle, 4 while printing) |
 
 ### Tapes
 
