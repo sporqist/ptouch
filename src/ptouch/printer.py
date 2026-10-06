@@ -521,6 +521,7 @@ class LabelPrinter(ABC):
         mirror_print: bool = False,
         special_tape: bool = False,
         starting_page: bool = True,
+        cut_each: int = 1,
     ) -> bytes:
         """Build control sequence for a single page in a multi-page job.
 
@@ -549,6 +550,9 @@ class LabelPrinter(ABC):
             the printer detecting non-laminated decorative tape.
         starting_page : bool, default True
             Whether this is the first page of the job ({n9} in ESC i z).
+        cut_each : int, default 1
+            Full cut after every this many pages (ESC i A); only sent with
+            auto cut.
 
         Returns
         -------
@@ -575,7 +579,7 @@ class LabelPrinter(ABC):
         )
         control_seq += self._cmd_mode_settings(auto_cut=auto_cut, mirror_print=mirror_print)
         if auto_cut and self.SUPPORTS_PAGE_NUMBER_CUTS:
-            control_seq += self._cmd_page_number_cuts(pages=1)
+            control_seq += self._cmd_page_number_cuts(pages=cut_each)
         control_seq += self._cmd_advanced_mode_settings(
             half_cut=half_cut,
             chain_printing=chain_printing,
@@ -700,6 +704,15 @@ class LabelPrinter(ABC):
             raise ValueError(f"{type(self).__name__} does not support {name}")
         return requested
 
+    def _check_cut_each(self, cut_each: int, auto_cut: bool) -> None:
+        """Refuse cut-each values the raster reference does not allow."""
+        if isinstance(cut_each, bool) or not isinstance(cut_each, int):
+            raise ValueError(f"cut_each must be an integer, got {cut_each!r}")
+        if not 1 <= cut_each <= 99:
+            raise ValueError(f"cut_each must be between 1 and 99, got {cut_each}")
+        if cut_each != 1 and not (auto_cut and self.SUPPORTS_PAGE_NUMBER_CUTS):
+            raise ValueError("cut_each needs auto cut (ESC i A is only sent with auto cut)")
+
     def build_page(
         self,
         label: Label,
@@ -712,6 +725,7 @@ class LabelPrinter(ABC):
         chain: bool | None = None,
         special_tape: bool | None = None,
         first_page: bool = True,
+        cut_each: int = 1,
     ) -> bytes:
         """Build one page (label) of a print job in column-by-column raster format.
 
@@ -752,14 +766,20 @@ class LabelPrinter(ABC):
         first_page : bool, default True
             Whether this label is the first page of the job. ``print_multi()``
             passes False for every later label ({n9} = 1 in ESC i z).
+        cut_each : int, default 1
+            With auto cut: full cut after every ``cut_each`` labels
+            (``ESC i A n``, 1-99). Every page of a job must carry the same
+            value, and a job should have a multiple of it in pages. Values
+            other than 1 need auto cut.
 
         Raises
         ------
         ValueError
-            If the label's tape type is not supported by this printer, or if
+            If the label's tape type is not supported by this printer, if
             a feature (``auto_cut``, ``half_cut``, ``mirror``, ``chain``,
             ``special_tape``) is explicitly requested but the printer model
-            does not support it (see the ``SUPPORTS_*`` class attributes).
+            does not support it (see the ``SUPPORTS_*`` class attributes),
+            or if ``cut_each`` is outside 1-99 or set without auto cut.
         """
         # Resolve high_resolution setting
         high_res = self.high_resolution if high_resolution is None else high_resolution
@@ -821,6 +841,8 @@ class LabelPrinter(ABC):
             supported=self.SUPPORTS_SPECIAL_TAPE,
         )
 
+        self._check_cut_each(cut_each, auto_cut)
+
         control_seq = self._build_page_control_sequence(
             num_lines=num_lines,
             margin=margin_dots,
@@ -833,6 +855,7 @@ class LabelPrinter(ABC):
             mirror_print=mirror,
             special_tape=special_tape,
             starting_page=first_page,
+            cut_each=cut_each,
         )
 
         raster_data = self._build_raster_data(raster, num_lines, high_res)
