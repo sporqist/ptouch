@@ -27,7 +27,6 @@ classifiers = [
 ]
 dependencies = [
     "Pillow",
-    "packbits",
 ]
 requires-python = ">= 3.11"
 

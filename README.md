@@ -27,7 +27,6 @@ pip install ptouch
 
 - Python 3.11+
 - Pillow
-- packbits
 
 For USB support:
 - pyusb
