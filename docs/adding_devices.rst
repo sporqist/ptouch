@@ -98,7 +98,7 @@ Create a new class in ``src/ptouch/printers.py``:
        # Default settings
        DEFAULT_USE_COMPRESSION = True
        DEFAULT_AUTO_CUT = True
-       DEFAULT_HALF_CUT = True
+       DEFAULT_HALF_CUT = False
        DEFAULT_HIGH_RESOLUTION = False
        DEFAULT_PAGE_NUMBER_CUTS = False
 

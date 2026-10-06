@@ -865,3 +865,34 @@ class TestInvalidateLength:
         conn = MockConnection()
         PTP900(conn)
         assert conn.data == b"\x00" * 200 + b"\x1b@"
+
+
+class TestHalfCutDefault:
+    """Half cut only where it separates labels: strips, not single labels."""
+
+    @staticmethod
+    def _advanced_modes(data: bytes) -> list[int]:
+        out, start = [], 0
+        while (i := data.find(b"\x1biK", start)) != -1:
+            out.append(data[i + 3])
+            start = i + 1
+        return out
+
+    def test_single_label_has_no_half_cut(self) -> None:
+        """A single print() sends ESC i K 08 (no chain, no half cut)."""
+        conn = MockConnection()
+        PTE550W(conn).print(Label(Image.new("RGB", (20, 128), "white"), Tape24mm))
+        assert self._advanced_modes(conn.data) == [0x08]
+
+    def test_strip_keeps_half_cut(self) -> None:
+        """print_multi() still half-cuts between labels (ESC i K 0C)."""
+        conn = MockConnection()
+        labels = [Label(Image.new("RGB", (20, 128), "white"), Tape24mm) for _ in range(2)]
+        PTE550W(conn).print_multi(labels)
+        assert self._advanced_modes(conn.data) == [0x0C, 0x0C]
+
+    def test_explicit_half_cut_still_possible(self) -> None:
+        """Callers can still ask for a half cut on a single label."""
+        conn = MockConnection()
+        PTE550W(conn).print(Label(Image.new("RGB", (20, 128), "white"), Tape24mm), half_cut=True)
+        assert self._advanced_modes(conn.data) == [0x0C]

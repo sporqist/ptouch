@@ -99,7 +99,10 @@ class LabelPrinter(ABC):
 
     # Default values for each feature (used when not specified)
     DEFAULT_AUTO_CUT: bool = True
-    DEFAULT_HALF_CUT: bool = True
+    # Half cut for a single print(). print_multi() always passes its own
+    # half_cut, so this only decides whether a lone label gets the half-cut
+    # bit; off, as in Brother's single-label settings.
+    DEFAULT_HALF_CUT: bool = False
     DEFAULT_HIGH_RESOLUTION: bool = False
     DEFAULT_PAGE_NUMBER_CUTS: bool = False
     DEFAULT_MIRROR_PRINT: bool = False
