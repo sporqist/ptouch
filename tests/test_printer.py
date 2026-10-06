@@ -792,3 +792,32 @@ class TestCapabilityEnforcement:
             found += 1
             idx += len(marker)
         assert found >= 2
+
+
+class TestPrintInformationMediaType:
+    """ESC i z: valid flags and the per-family media type for TZe tape."""
+
+    @staticmethod
+    def _print_info(printer_cls: type) -> bytes:
+        from ptouch import Label, Tape24mm
+        from PIL import Image
+
+        conn = MockConnection()
+        printer = printer_cls(conn)
+        printer.print(Label(Image.new("RGB", (20, 128), "white"), Tape24mm))
+        i = conn.data.index(b"\x1biz")
+        return conn.data[i + 3 : i + 7]
+
+    def test_e550w_family_sends_laminated(self) -> None:
+        """PT-E550W reference: 01h = laminated; 00h would mean no tape."""
+        from ptouch import PTE550W, PTP710BT, PTP750W
+
+        for cls in (PTE550W, PTP750W, PTP710BT):
+            assert self._print_info(cls) == bytes([0x86, 0x01, 24, 0x00]), cls.__name__
+
+    def test_p900_family_sends_00_for_tape(self) -> None:
+        """PT-P900 reference: 00h = laminated/non-laminated tape."""
+        from ptouch import PTP900, PTP900W, PTP950NW
+
+        for cls in (PTP900, PTP900W, PTP950NW):
+            assert self._print_info(cls)[:2] == bytes([0x86, 0x00]), cls.__name__

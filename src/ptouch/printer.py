@@ -122,6 +122,12 @@ class LabelPrinter(ABC):
         """
         return sorted(self.PIN_CONFIGS.keys(), key=lambda t: t.__name__)
 
+    # Media type sent for TZe tape in ESC i z {n2}. The PT-P900 series
+    # reference defines 00h for laminated and non-laminated tape; the
+    # PT-E550W/P750W/P710BT reference defines 01h (laminated) and 00h as
+    # "no tape", so those models override this.
+    TAPE_MEDIA_TYPE: MediaType = MediaType.NO_MEDIA
+
     # Margin constraints in mm. See manual section "2.3.3 Feed amount".
     MIN_MARGIN_MM: float = 2.0
     MAX_MARGIN_MM: float = 127.0
@@ -160,8 +166,7 @@ class LabelPrinter(ABC):
                 return MediaType.HEATSHRINK_TUBE_31
             # 2:1 series tubes (default for HeatShrinkTube)
             return MediaType.HEATSHRINK_TUBE_21
-        # Default: let printer auto-detect (works for laminated tapes)
-        return MediaType.NO_MEDIA
+        return self.TAPE_MEDIA_TYPE
 
     def __init__(
         self,
@@ -258,10 +263,11 @@ class LabelPrinter(ABC):
         bytes
             Command bytes for print information.
         """
-        PI_LENGTH = 0x02  # Length valid
-        PI_WIDTH = 0x04  # Tape width valid
-        PI_RECOVER = 0x80  # Recover mode (priority to print quality)
-        n1 = PI_RECOVER | PI_WIDTH | PI_LENGTH
+        # Valid flags, as defined in the raster command references.
+        PI_KIND = 0x02  # Media type valid: the printer checks it against the cassette
+        PI_WIDTH = 0x04  # Media width valid
+        PI_RECOVER = 0x80  # Printer recovery always on
+        n1 = PI_RECOVER | PI_WIDTH | PI_KIND
 
         return struct.pack(
             "<7BL2B",
