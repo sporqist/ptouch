@@ -16,6 +16,7 @@ from PIL import Image
 from .connection import Connection
 from .label import Label
 from .packbits import encode_raster_line
+from .validate import JobSummary, validate_job
 from .tape import (
     HeatShrinkTube,
     HeatShrinkTube3_1_5_2mm,
@@ -193,6 +194,8 @@ class LabelPrinter(ABC):
             Whether to use high resolution mode. Defaults to class setting.
         """
         self.connection = connection
+        # Upper bound for pages in one job; None = no limit (see send_job).
+        self.max_pages: int | None = None
         connection.connect(self)
 
         # Send initialization commands after connection is established
@@ -697,7 +700,7 @@ class LabelPrinter(ABC):
             raise ValueError(f"{type(self).__name__} does not support {name}")
         return requested
 
-    def print(
+    def build_page(
         self,
         label: Label,
         margin_mm: float | None = None,
@@ -709,8 +712,11 @@ class LabelPrinter(ABC):
         chain: bool | None = None,
         special_tape: bool | None = None,
         first_page: bool = True,
-    ) -> None:
-        """Print a label using column-by-column raster format.
+    ) -> bytes:
+        """Build one page (label) of a print job in column-by-column raster format.
+
+        Returns the page's bytes; :meth:`print` and :meth:`print_multi` send
+        them through :meth:`send_job`.
 
         Parameters
         ----------
@@ -834,10 +840,64 @@ class LabelPrinter(ABC):
         # Choose print command: 0x0C (print) or 0x1A (print and feed)
         print_cmd = b"\x1a" if feed else b"\x0c"
 
-        all_data = control_seq + raster_data + print_cmd
-        self.connection.write(all_data)
+        return control_seq + raster_data + print_cmd
 
-        logger.info("Sent all data to printer.")
+    def print(
+        self,
+        label: Label,
+        margin_mm: float | None = None,
+        high_resolution: bool | None = None,
+        feed: bool = True,
+        auto_cut: bool | None = None,
+        half_cut: bool | None = None,
+        mirror: bool | None = None,
+        chain: bool | None = None,
+        special_tape: bool | None = None,
+        first_page: bool = True,
+    ) -> None:
+        """Print one label. Parameters as in :meth:`build_page`.
+
+        The page is validated against the raster command grammar before it
+        is sent (see :meth:`send_job`).
+        """
+        self.send_job(
+            self.build_page(
+                label,
+                margin_mm=margin_mm,
+                high_resolution=high_resolution,
+                feed=feed,
+                auto_cut=auto_cut,
+                half_cut=half_cut,
+                mirror=mirror,
+                chain=chain,
+                special_tape=special_tape,
+                first_page=first_page,
+            )
+        )
+
+    def send_job(self, data: bytes) -> JobSummary:
+        """Validate a job and write it to the printer in one piece.
+
+        Parameters
+        ----------
+        data : bytes
+            Pages built with :meth:`build_page`.
+
+        Returns
+        -------
+        JobSummary
+            What the job asks the printer to do, page by page.
+
+        Raises
+        ------
+        InvalidJobError
+            If the job does not fit the raster command grammar or this
+            model's limits. Nothing is sent in that case.
+        """
+        summary = validate_job(data, self, max_pages=self.max_pages)
+        self.connection.write(data)
+        logger.info(f"Sent {len(summary.pages)} page(s), {len(data)} bytes.")
+        return summary
 
     def print_multi(
         self,
@@ -917,21 +977,25 @@ class LabelPrinter(ABC):
         if precut:
             self.precut(labels[0].tape)
 
+        pages: list[bytes] = []
         for idx, label in enumerate(labels):
             is_last = idx == len(labels) - 1
-            logger.info(f"Printing label {idx + 1}/{len(labels)}")
+            logger.info(f"Building label {idx + 1}/{len(labels)}")
 
-            self.print(
-                label,
-                margin_mm=margin_mm,
-                high_resolution=high_resolution,
-                feed=is_last,
-                first_page=idx == 0,
-                auto_cut=not half_cut,
-                half_cut=half_cut,
-                mirror=mirror,
-                chain=chain,
-                special_tape=special_tape,
+            pages.append(
+                self.build_page(
+                    label,
+                    margin_mm=margin_mm,
+                    high_resolution=high_resolution,
+                    feed=is_last,
+                    first_page=idx == 0,
+                    auto_cut=not half_cut,
+                    half_cut=half_cut,
+                    mirror=mirror,
+                    chain=chain,
+                    special_tape=special_tape,
+                )
             )
 
+        self.send_job(b"".join(pages))
         logger.info(f"Finished printing {len(labels)} labels.")
