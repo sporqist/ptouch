@@ -22,7 +22,7 @@ try:
 
     _HAS_PYUSB = True
 except ImportError:  # pragma: no cover — exercised when pyusb is absent
-    usb = None  # type: ignore[assignment]
+    usb = None
     _HAS_PYUSB = False
 
 if TYPE_CHECKING:

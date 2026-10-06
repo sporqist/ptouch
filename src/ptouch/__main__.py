@@ -12,6 +12,7 @@ from PIL import Image, ImageFont
 
 from . import (
     Align,
+    Connection,
     ConnectionNetwork,
     ConnectionUSB,
     HeatShrinkTube3_1_5_2mm,
@@ -365,6 +366,7 @@ def main() -> int:  # noqa: C901 - pre-existing, inherited from upstream
             return 1
 
     # Create connection
+    connection: Connection
     if args.host:
         connection = ConnectionNetwork(args.host)
     elif args.usb is True:
@@ -394,7 +396,7 @@ def main() -> int:  # noqa: C901 - pre-existing, inherited from upstream
     # Create label(s)
     if args.image:
         image = Image.open(args.image)
-        labels = [Label(image, media_class)]
+        labels: list[Label] = [Label(image, media_class)]
     else:
         # Parse alignment
         h_align = ALIGN_HORIZONTAL.get(args.align[0].lower())
@@ -453,14 +455,16 @@ def main() -> int:  # noqa: C901 - pre-existing, inherited from upstream
         # auto_size=True (default) unless font_size is explicitly set
         auto_size = args.font_size is None
 
-        labels = create_text_labels(
-            args.text,
-            media_class,
-            font=font,
-            align=align,
-            font_size=args.font_size,
-            fixed_width_mm=fixed_width_mm,
-            auto_size=auto_size,
+        labels = list(
+            create_text_labels(
+                args.text,
+                media_class,
+                font=font,
+                align=align,
+                font_size=args.font_size,
+                fixed_width_mm=fixed_width_mm,
+                auto_size=auto_size,
+            )
         )
 
     # Apply copies

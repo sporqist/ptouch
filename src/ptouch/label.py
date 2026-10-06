@@ -124,7 +124,7 @@ class TextLabel(Label):
         self._image: Image.Image | None = None
 
     @property
-    def image(self) -> Image.Image:
+    def image(self) -> Image.Image:  # type: ignore[override]  # read-only once rendered
         """Get the rendered image."""
         if self._image is None:
             raise RuntimeError(
@@ -155,29 +155,34 @@ class TextLabel(Label):
         # Build a loader that can re-create the font at an arbitrary size, so we
         # can shrink it to fit a fixed width. can_resize is False for bitmap
         # fonts that cannot be scaled.
-        if isinstance(self.font, str):
+        # The constructor only admits a path string or a FreeTypeFont.
+        base_font = self.font
+        if isinstance(base_font, str):
+            path = base_font
             if self.auto_size:
                 font_size = auto_font_size
             else:
                 font_size = self.font_size if self.font_size is not None else auto_font_size
 
             def load_font(size: int) -> ImageFont.FreeTypeFont:
-                return ImageFont.truetype(self.font, size)
+                return ImageFont.truetype(path, size)
 
             can_resize = True
-        elif hasattr(self.font, "font_variant") and getattr(self.font, "size", None):
-            font_size = auto_font_size if self.auto_size else int(self.font.size)
+            font = load_font(font_size)
+        elif base_font.size:
+            scalable = base_font
+            font_size = auto_font_size if self.auto_size else int(scalable.size)
 
             def load_font(size: int) -> ImageFont.FreeTypeFont:
-                return self.font.font_variant(size=size)
+                return scalable.font_variant(size=size)
 
             can_resize = True
+            font = load_font(font_size)
         else:
-            # Bitmap font or anything not scalable: use as-is.
-            font_size = getattr(self.font, "size", None)
+            # A font without a usable size cannot be scaled: use as-is.
+            font_size = 0
             can_resize = False
-
-        font = load_font(font_size) if can_resize else self.font
+            font = base_font
 
         # Measure text size
         temp_img = Image.new("RGB", (1, 1))
