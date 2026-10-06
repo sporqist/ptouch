@@ -25,6 +25,9 @@ Example usage:
     >>> printer.print(label)
 """
 
+from importlib.metadata import PackageNotFoundError
+from importlib.metadata import version as _version
+
 from .connection import (
     Connection,
     ConnectionNetwork,
@@ -72,7 +75,10 @@ from .tape import (
     Tape36mm,
 )
 
-__version__ = "1.1.0"
+try:
+    __version__ = _version("ptouch")
+except PackageNotFoundError:  # running from a source tree without install
+    __version__ = "0.0.0+unknown"
 
 __all__ = [
     # Version
