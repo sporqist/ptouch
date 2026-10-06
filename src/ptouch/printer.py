@@ -128,6 +128,10 @@ class LabelPrinter(ABC):
     # "no tape", so those models override this.
     TAPE_MEDIA_TYPE: MediaType = MediaType.NO_MEDIA
 
+    # Length of the invalidate (NULL) preamble: 200 bytes in the PT-P900
+    # series reference, 100 in the PT-E550W/P750W/P710BT reference.
+    INVALIDATE_BYTES: int = 200
+
     # Margin constraints in mm. See manual section "2.3.3 Feed amount".
     MIN_MARGIN_MM: float = 2.0
     MAX_MARGIN_MM: float = 127.0
@@ -228,9 +232,9 @@ class LabelPrinter(ABC):
             )
         return self.PIN_CONFIGS[tape_type]
 
-    def _cmd_invalidate(self, length: int = 200) -> bytes:
+    def _cmd_invalidate(self, length: int | None = None) -> bytes:
         """Send invalidate command (null bytes) to clear printer buffer."""
-        return b"\x00" * length
+        return b"\x00" * (self.INVALIDATE_BYTES if length is None else length)
 
     def _cmd_initialize(self) -> bytes:
         """Send initialize command (ESC @)."""
