@@ -11,11 +11,11 @@ from dataclasses import dataclass
 from enum import Enum
 from math import ceil
 
-import packbits
 from PIL import Image
 
 from .connection import Connection
 from .label import Label
+from .packbits import encode_raster_line
 from .tape import (
     HeatShrinkTube,
     HeatShrinkTube3_1_5_2mm,
@@ -583,11 +583,11 @@ class LabelPrinter(ABC):
 
             for _ in range(repeat_count):
                 if self.use_compression:
-                    # TIFF/packbits compression
+                    # TIFF/PackBits compression (<= 17 bytes per line, per spec)
                     if line_data == b"\x00" * self.BYTES_PER_LINE:
                         raster_data += b"\x5a"  # Z - Zero raster graphics
                     else:
-                        compressed_line = packbits.encode(line_data)
+                        compressed_line = encode_raster_line(line_data)
                         raster_data += b"\x47"  # G - Raster graphics transfer
                         raster_data += struct.pack("<H", len(compressed_line))
                         raster_data += compressed_line

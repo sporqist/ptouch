@@ -78,7 +78,6 @@ Requirements
 
 * Python 3.11 or later
 * Pillow (image processing)
-* packbits (TIFF compression)
 * pyusb (optional, for USB support)
 
 Verifying Installation
