@@ -245,7 +245,11 @@ class LabelPrinter(ABC):
         return struct.pack("BBBB", 0x1B, 0x69, 0x61, 0x01)
 
     def _cmd_print_information(
-        self, length: int, media_type: MediaType, tape_width_mm: int
+        self,
+        length: int,
+        media_type: MediaType,
+        tape_width_mm: int,
+        starting_page: bool = True,
     ) -> bytes:
         """Set print information command (ESC i z).
 
@@ -257,6 +261,9 @@ class LabelPrinter(ABC):
             Type of media being used.
         tape_width_mm : int
             Tape width in millimeters.
+        starting_page : bool, default True
+            First page of the job ({n9} = 0); later pages of a multi-page job
+            send 1, as in Brother's sample print data.
 
         Returns
         -------
@@ -279,7 +286,7 @@ class LabelPrinter(ABC):
             tape_width_mm,
             0x00,
             ceil(length),
-            0x00,
+            0x00 if starting_page else 0x01,
             0x00,
         )
 
@@ -503,6 +510,7 @@ class LabelPrinter(ABC):
         chain_printing: bool = False,
         mirror_print: bool = False,
         special_tape: bool = False,
+        starting_page: bool = True,
     ) -> bytes:
         """Build control sequence for a single page in a multi-page job.
 
@@ -529,6 +537,8 @@ class LabelPrinter(ABC):
         special_tape : bool, default False
             Enable special-tape no-cut mode. Effect is conditional on
             the printer detecting non-laminated decorative tape.
+        starting_page : bool, default True
+            Whether this is the first page of the job ({n9} in ESC i z).
 
         Returns
         -------
@@ -550,7 +560,9 @@ class LabelPrinter(ABC):
         control_seq += self._additional_control_commands()
         # Determine media type from tape (important for heat shrink tubes)
         media_type = self._get_media_type(tape)
-        control_seq += self._cmd_print_information(num_lines, media_type, tape.width_mm)
+        control_seq += self._cmd_print_information(
+            num_lines, media_type, tape.width_mm, starting_page=starting_page
+        )
         control_seq += self._cmd_mode_settings(auto_cut=auto_cut, mirror_print=mirror_print)
         if auto_cut and self.SUPPORTS_PAGE_NUMBER_CUTS:
             control_seq += self._cmd_page_number_cuts(pages=1)
@@ -689,6 +701,7 @@ class LabelPrinter(ABC):
         mirror: bool | None = None,
         chain: bool | None = None,
         special_tape: bool | None = None,
+        first_page: bool = True,
     ) -> None:
         """Print a label using column-by-column raster format.
 
@@ -723,6 +736,9 @@ class LabelPrinter(ABC):
             Enable special-tape no-cut mode. If None, uses
             DEFAULT_SPECIAL_TAPE. Effect is conditional on the loaded
             cassette being non-laminated decorative tape.
+        first_page : bool, default True
+            Whether this label is the first page of the job. ``print_multi()``
+            passes False for every later label ({n9} = 1 in ESC i z).
 
         Raises
         ------
@@ -803,6 +819,7 @@ class LabelPrinter(ABC):
             chain_printing=chain,
             mirror_print=mirror,
             special_tape=special_tape,
+            starting_page=first_page,
         )
 
         raster_data = self._build_raster_data(raster, num_lines, high_res)
@@ -902,6 +919,7 @@ class LabelPrinter(ABC):
                 margin_mm=margin_mm,
                 high_resolution=high_resolution,
                 feed=is_last,
+                first_page=idx == 0,
                 auto_cut=not half_cut,
                 half_cut=half_cut,
                 mirror=mirror,

@@ -821,3 +821,28 @@ class TestPrintInformationMediaType:
 
         for cls in (PTP900, PTP900W, PTP950NW):
             assert self._print_info(cls)[:2] == bytes([0x86, 0x00]), cls.__name__
+
+
+class TestStartingPageFlag:
+    """ESC i z {n9}: 0 on the first page, 1 on later pages (Brother's sample)."""
+
+    def test_print_multi_marks_later_pages(self) -> None:
+        """Every page after the first carries n9 = 1."""
+        conn = MockConnection()
+        printer = PTE550W(conn)
+        labels = [Label(Image.new("RGB", (20, 128), "white"), Tape24mm) for _ in range(3)]
+        printer.print_multi(labels)
+        flags = []
+        start = 0
+        while (i := conn.data.find(b"\x1biz", start)) != -1:
+            flags.append(conn.data[i + 3 + 8])
+            start = i + 1
+        assert flags == [0, 1, 1]
+
+    def test_single_print_is_a_starting_page(self) -> None:
+        """A single print() is the first page of its job."""
+        conn = MockConnection()
+        printer = PTE550W(conn)
+        printer.print(Label(Image.new("RGB", (20, 128), "white"), Tape24mm))
+        i = conn.data.index(b"\x1biz")
+        assert conn.data[i + 3 + 8] == 0
