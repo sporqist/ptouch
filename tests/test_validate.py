@@ -157,3 +157,68 @@ class TestSendJob:
         printer.max_pages = 2
         with pytest.raises(InvalidJobError):
             printer.print_multi([_label(), _label(), _label()])
+
+
+class TestSameSettingsOnEveryPage:
+    """Changing cut settings between pages makes a PT-E550W cut after every label."""
+
+    def _strip(self, labels: int = 3, **kw: object) -> tuple[bytes, PTE550W]:
+        printer = PTE550W(MockConnection())
+        return printer.build_job([_label() for _ in range(labels)], **kw), printer  # type: ignore[arg-type]
+
+    def test_built_job_validates(self) -> None:
+        """build_job gives every page the same settings."""
+        data, printer = self._strip(4, cut_each=2, half_cut=True)
+        summary = validate_job(data, printer)
+        assert [p.cut_each for p in summary.pages] == [2, 2, 2, 2]
+
+    @pytest.mark.parametrize(
+        ("old", "new"),
+        [
+            (b"\x1biK\x0c", b"\x1biK\x04"),  # chain on page 1 only
+            (b"\x1biK\x0c", b"\x1biK\x08"),  # half cut dropped
+            (b"\x1biA\x01", b"\x1biA\x02"),  # other cut-each
+            (b"\x1bid\x0e\x00", b"\x1bid\x0f\x00"),  # other margin
+        ],
+    )
+    def test_second_page_differs(self, old: bytes, new: bytes) -> None:
+        """One setting changed on page 1 only is refused at that page."""
+        data, printer = self._strip(2, half_cut=True)
+        second = data.index(b"\x1bia\x01", 1)
+        bad = data[:second] + data[second:].replace(old, new, 1)
+        with pytest.raises(InvalidJobError, match=f"byte {second}: page 1: settings differ"):
+            validate_job(bad, printer)
+
+    def test_auto_cut_dropped_on_later_page(self) -> None:
+        """A page without auto cut (and so without ESC i A) differs too."""
+        data, printer = self._strip(2)
+        second = data.index(b"\x1bia\x01", 1)
+        tail = data[second:].replace(b"\x1biM\x40\x1biA\x01", b"\x1biM\x00", 1)
+        with pytest.raises(InvalidJobError, match="settings differ"):
+            validate_job(data[:second] + tail, printer)
+
+
+class TestCutEachPages:
+    """With cut-each N the job has a multiple of N pages."""
+
+    def test_remainder_refused(self) -> None:
+        """Four pages with cut-each 3 would leave a piece of one."""
+        printer = PTE550W(MockConnection())
+        pages = [
+            printer.build_page(_label(), cut_each=3, feed=i == 3, first_page=i == 0)
+            for i in range(4)
+        ]
+        with pytest.raises(InvalidJobError, match="4 pages is not a multiple of cut-each 3"):
+            validate_job(b"".join(pages), printer)
+
+    def test_multiple_accepted(self) -> None:
+        """Six pages with cut-each 3 are two pieces."""
+        printer = PTE550W(MockConnection())
+        job = printer.build_job([_label() for _ in range(6)], cut_each=3)
+        assert len(validate_job(job, printer).pages) == 6
+
+    def test_no_auto_cut_no_rule(self) -> None:
+        """Strips without auto cut carry no ESC i A and any page count."""
+        printer = PTE550W(MockConnection())
+        job = printer.build_job([_label() for _ in range(5)], auto_cut=False, half_cut=True)
+        assert validate_job(job, printer).pages[0].cut_each is None

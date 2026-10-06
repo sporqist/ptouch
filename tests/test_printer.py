@@ -1116,3 +1116,78 @@ class TestHighResolutionImage:
         printer = NoHighResolution(mock_connection)
         with pytest.raises(ValueError, match="does not support high resolution"):
             printer.build_page(self._label(), high_resolution_image=True)
+
+
+class TestBuildJob:
+    """build_job: a whole job, the same settings on every page."""
+
+    @staticmethod
+    def _labels(n: int) -> list[Label]:
+        return [Label(Image.new("RGB", (20, 128), "white"), Tape24mm) for _ in range(n)]
+
+    def test_preamble(self, mock_connection: MockConnection) -> None:
+        """Invalidate (100 x 00 on the E550W) and ESC @, as written on connect."""
+        printer = PTE550W(mock_connection)
+        assert printer.preamble() == b"\x00" * 100 + b"\x1b@"
+        assert mock_connection.data == printer.preamble()
+
+    def test_job_has_no_preamble(self, mock_connection: MockConnection) -> None:
+        """The job starts at the first page's ESC i a."""
+        job = PTE550W(mock_connection).build_job(self._labels(1))
+        assert job.startswith(b"\x1bia\x01")
+
+    def test_cut_each_job(self, mock_connection: MockConnection) -> None:
+        """Four labels, cut each 2, half cut: identical pages, one final feed."""
+        job = PTE550W(mock_connection).build_job(self._labels(4), cut_each=2, half_cut=True)
+        page = [
+            ("ESC i M", "40"),
+            ("ESC i A", "02"),
+            ("ESC i K", "0c"),
+            ("ESC i d", "0e 00"),
+            ("compression", "02"),
+            ("raster", "20 lines, all blocks <= 17 bytes"),
+        ]
+        later = [("ESC i a", "01"), ("ESC i z", "86 01 18 00 14 00 00 00 01 00"), *page]
+        assert job_commands(job) == [
+            ("ESC i a", "01"),
+            ("ESC i z", "86 01 18 00 14 00 00 00 00 00"),
+            *page,
+            ("print", "0c"),
+            *later,
+            ("print", "0c"),
+            *later,
+            ("print", "0c"),
+            *later,
+            ("print + feed", "1a"),
+        ]
+
+    def test_chain_on_every_page(self, mock_connection: MockConnection) -> None:
+        """A chained job clears the no-chain bit on every page, not just the last."""
+        job = PTE550W(mock_connection).build_job(self._labels(3), half_cut=True, chain=True)
+        assert _page_commands(job, "ESC i K") == ["04", "04", "04"]
+        assert job_commands(job)[-1] == ("print + feed", "1a")
+
+    def test_not_a_multiple(self, mock_connection: MockConnection) -> None:
+        """Three labels cannot be cut in pieces of two."""
+        with pytest.raises(ValueError, match="3 labels is not a multiple of cut_each 2"):
+            PTE550W(mock_connection).build_job(self._labels(3), cut_each=2)
+
+    def test_empty(self, mock_connection: MockConnection) -> None:
+        """A job needs a label."""
+        with pytest.raises(ValueError, match="At least one label"):
+            PTE550W(mock_connection).build_job([])
+
+    def test_mixed_tapes(self, mock_connection: MockConnection) -> None:
+        """All pages are on the same tape."""
+        labels = [*self._labels(1), Label(Image.new("RGB", (20, 70), "white"), Tape12mm)]
+        with pytest.raises(ValueError, match="same tape"):
+            PTE550W(mock_connection).build_job(labels)
+
+    def test_max_pages(self, mock_connection: MockConnection) -> None:
+        """printer.max_pages caps build_job like send_job."""
+        from ptouch.validate import InvalidJobError
+
+        printer = PTE550W(mock_connection)
+        printer.max_pages = 2
+        with pytest.raises(InvalidJobError, match="more than 2 pages"):
+            printer.build_job(self._labels(3))

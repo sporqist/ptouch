@@ -16,6 +16,12 @@ Per page: ``ESC i a 01``, then the control codes ``ESC i z``, ``ESC i M``,
 (more pages follow) or ``1A`` (last page, feed). The invalidate and
 initialize preamble is sent when the printer object is created and is
 not part of a job.
+
+Across pages: every page carries the same settings (print information
+flags, media and width, ``ESC i M``, ``ESC i A``, ``ESC i K``,
+``ESC i d`` and compression); a PT-E550W cuts fully after every label
+when they change between pages. With cut-each N the job has a multiple
+of N pages.
 """
 
 from __future__ import annotations
@@ -55,6 +61,7 @@ class PageSummary:
     high_resolution: bool
     compressed: bool
     last: bool
+    cut_each: int | None = None
 
 
 @dataclass
@@ -155,6 +162,7 @@ def _check_header(
         high_resolution=high_res,
         compressed=False,
         last=False,
+        cut_each=seen[b"A"][0] if b"A" in seen else None,
     )
 
 
@@ -197,6 +205,31 @@ def _raster(r: _Reader, page: int, compressed: bool, width: int) -> int:
         lines += 1
 
 
+def _page(r: _Reader, page: int, printer: LabelPrinter) -> tuple[PageSummary, tuple[bytes, ...]]:
+    """Read one page; return its summary and the settings that must not change."""
+    seen = _header(r, page)
+    info = _check_header(r, page, seen, printer)
+    comp = r.take(2)
+    if comp not in (b"M\x00", b"M\x02"):
+        r.i -= 2
+        raise r.fail(f"page {page}: expected compression M 00 or M 02")
+    info.compressed = comp == b"M\x02"
+    lines = _raster(r, page, info.compressed, printer.BYTES_PER_LINE)
+    if lines != info.raster_lines:
+        said = info.raster_lines
+        raise r.fail(f"page {page}: {lines} raster lines sent, print information says {said}")
+    info.last = r.take(1) == b"\x1a"
+    z = seen[b"z"]
+    settings = (z[:4], seen[b"M"], seen.get(b"A", b""), seen[b"K"], seen[b"d"], comp)
+    return info, settings
+
+
+def _check_cut_each_pages(summary: JobSummary) -> None:
+    each = summary.pages[0].cut_each
+    if each and len(summary.pages) % each:
+        raise InvalidJobError(f"{len(summary.pages)} pages is not a multiple of cut-each {each}")
+
+
 def validate_job(data: bytes, printer: LabelPrinter, max_pages: int | None = None) -> JobSummary:
     """Validate a job built for ``printer``.
 
@@ -221,24 +254,24 @@ def validate_job(data: bytes, printer: LabelPrinter, max_pages: int | None = Non
     """
     r = _Reader(data)
     summary = JobSummary()
+    first: tuple[bytes, ...] | None = None
     while r.i < len(data):
         page = len(summary.pages)
         if max_pages is not None and page >= max_pages:
             raise r.fail(f"more than {max_pages} pages")
-        info = _check_header(r, page, _header(r, page), printer)
-        comp = r.take(2)
-        if comp not in (b"M\x00", b"M\x02"):
-            r.i -= 2
-            raise r.fail(f"page {page}: expected compression M 00 or M 02")
-        info.compressed = comp == b"M\x02"
-        lines = _raster(r, page, info.compressed, printer.BYTES_PER_LINE)
-        if lines != info.raster_lines:
-            said = info.raster_lines
-            raise r.fail(f"page {page}: {lines} raster lines sent, print information says {said}")
-        info.last = r.take(1) == b"\x1a"
+        start = r.i
+        info, settings = _page(r, page, printer)
+        if first is None:
+            first = settings
+        elif settings != first:
+            raise InvalidJobError(
+                f"byte {start}: page {page}: settings differ from page 0 "
+                "(cut, mode, margin and compression must be the same on every page)"
+            )
         summary.pages.append(info)
         if info.last and r.i < len(data):
             raise r.fail("data after the last page (1A)")
     if not summary.pages:
         raise InvalidJobError("empty job")
+    _check_cut_each_pages(summary)
     return summary
