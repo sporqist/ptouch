@@ -114,9 +114,9 @@ def _one_command(data: bytes, i: int) -> tuple[int, tuple[str, str]]:
         while j < len(data) and data[j] == 0x00:
             j += 1
         return j, ("invalidate", f"{j - i} x 00")
-    if data[i : i + 2] == b"@":
+    if data[i : i + 2] == b"\x1b@":
         return i + 2, ("initialize", "1b 40")
-    if data[i : i + 2] == b"i":
+    if data[i : i + 2] == b"\x1bi":
         n = _ESC_I_SIZES[data[i + 2 : i + 3]]
         return i + 3 + n, ("ESC i " + chr(data[i + 2]), data[i + 3 : i + 3 + n].hex(" "))
     if data[i] == 0x4D:
