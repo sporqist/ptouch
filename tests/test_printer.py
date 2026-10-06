@@ -846,3 +846,22 @@ class TestStartingPageFlag:
         printer.print(Label(Image.new("RGB", (20, 128), "white"), Tape24mm))
         i = conn.data.index(b"\x1biz")
         assert conn.data[i + 3 + 8] == 0
+
+
+class TestInvalidateLength:
+    """Invalidate preamble length per model family, from each raster reference."""
+
+    def test_e550w_family_sends_100(self) -> None:
+        """PT-E550W/P750W/P710BT reference: 100 bytes."""
+        from ptouch import PTP710BT, PTP750W
+
+        for cls in (PTE550W, PTP750W, PTP710BT):
+            conn = MockConnection()
+            cls(conn)
+            assert conn.data == b"\x00" * 100 + b"\x1b@", cls.__name__
+
+    def test_p900_family_sends_200(self) -> None:
+        """PT-P900 series reference: 200 bytes."""
+        conn = MockConnection()
+        PTP900(conn)
+        assert conn.data == b"\x00" * 200 + b"\x1b@"

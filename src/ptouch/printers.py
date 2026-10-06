@@ -37,6 +37,8 @@ class PTE550W(LabelPrinter):
     USB_PRODUCT_ID = 0x2060
     # TZe tape is laminated (01h); 00h would mean "no tape" on this family.
     TAPE_MEDIA_TYPE = MediaType.LAMINATED_TAPE
+    # The raster reference specifies a 100-byte invalidate for this family.
+    INVALIDATE_BYTES = 100
     TOTAL_PINS = 128
     BYTES_PER_LINE = 16
     RESOLUTION_DPI = 180
