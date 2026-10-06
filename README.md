@@ -1,10 +1,17 @@
 # ptouch
 
-[![Tests](https://github.com/nbuchwitz/python3-ptouch/actions/workflows/pytest.yml/badge.svg)](https://github.com/nbuchwitz/python3-ptouch/actions/workflows/pytest.yml)
-[![Linting](https://github.com/nbuchwitz/python3-ptouch/actions/workflows/lint.yml/badge.svg)](https://github.com/nbuchwitz/python3-ptouch/actions/workflows/lint.yml)
-[![Documentation Status](https://readthedocs.org/projects/ptouch/badge/?version=latest)](https://ptouch.readthedocs.io/en/latest/?badge=latest)
+[![Tests](https://github.com/sporqist/ptouch/actions/workflows/pytest.yml/badge.svg)](https://github.com/sporqist/ptouch/actions/workflows/pytest.yml)
+[![Linting](https://github.com/sporqist/ptouch/actions/workflows/lint.yml/badge.svg)](https://github.com/sporqist/ptouch/actions/workflows/lint.yml)
 
 A Python library for Brother P-touch label printers.
+
+> **Fork of [nbuchwitz/ptouch](https://github.com/nbuchwitz/ptouch).**
+> Kept compatible with upstream; fixes are offered back as pull requests.
+> Additions here: no third-party PackBits dependency (raster lines capped at
+> 17 bytes as Brother's reference requires) and a PEP 517 build. Releases
+> are on GitHub only, versioned on top of the upstream release they build
+> on (e.g. `1.1.0+sporq.1`); the `ptouch` name on PyPI belongs to upstream.
+> The documentation linked below is upstream's.
 
 ## Features
 

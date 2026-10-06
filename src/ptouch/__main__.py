@@ -326,7 +326,7 @@ def create_text_labels(
     ]
 
 
-def main() -> int:
+def main() -> int:  # noqa: C901 - pre-existing, inherited from upstream
     """Run the command-line interface."""
     args = parse_args()
 
