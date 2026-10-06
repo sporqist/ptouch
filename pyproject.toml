@@ -2,10 +2,16 @@
 #
 # SPDX-License-Identifier: LGPL-2.1-or-later
 
+[build-system]
+requires = ["setuptools>=80", "setuptools-scm>=9"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "ptouch"
 description = "Python library for Brother P-touch label printers"
-version = "1.1.0"
+dynamic = ["version"]
+license = "LGPL-2.1-or-later"
+license-files = ["LICENSE"]
 readme = "README.md"
 authors = [{ name = "Nicolai Buchwitz", email = "nb@tipi-net.de" }]
 maintainers = [{ name = "Nicolai Buchwitz", email = "nb@tipi-net.de" }]
@@ -13,7 +19,6 @@ keywords = ["brother", "p-touch", "label", "printer", "raster"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
-    "License :: OSI Approved :: GNU Lesser General Public License v2 or later (LGPLv2+)",
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.11",
@@ -46,6 +51,12 @@ ptouch = "ptouch.__main__:main"
 
 [tool.setuptools.package-dir]
 "" = "src"
+
+# Version comes from git tags. Fork releases are tagged with a local
+# version part on top of the upstream release they build on, e.g.
+# v1.1.0+sporq.1, so they can never be confused with (or uploaded as)
+# an upstream PyPI release.
+[tool.setuptools_scm]
 
 [tool.black]
 line-length = 100
