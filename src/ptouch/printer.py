@@ -717,7 +717,10 @@ class LabelPrinter(ABC):
     ) -> bool:
         """Whether a page is sent in high resolution mode."""
         if not high_resolution_image:
-            return self.high_resolution if high_resolution is None else high_resolution
+            high_res = self.high_resolution if high_resolution is None else high_resolution
+            if high_res and not self.supports_high_resolution:
+                raise ValueError(f"{type(self).__name__} does not support high resolution")
+            return high_res
         if not self.supports_high_resolution:
             raise ValueError(f"{type(self).__name__} does not support high resolution")
         if high_resolution is False:
@@ -811,8 +814,9 @@ class LabelPrinter(ABC):
             ``special_tape``) is explicitly requested but the printer model
             does not support it (see the ``SUPPORTS_*`` class attributes),
             or if ``cut_each`` is outside 1-99 or set without auto cut, or
-            if ``high_resolution_image`` is set on a printer without high
-            resolution or together with ``high_resolution=False``.
+            if high resolution or ``high_resolution_image`` is asked of a
+            printer without high resolution (``RESOLUTION_DPI_HIGH = 0``),
+            or ``high_resolution_image`` comes with ``high_resolution=False``.
         """
         # Resolve high_resolution setting
         high_res = self._resolve_high_resolution(high_resolution, high_resolution_image)

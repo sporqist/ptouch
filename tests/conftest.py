@@ -92,7 +92,7 @@ def tape_36mm() -> Tape36mm:
 _ESC_I_SIZES = {b"a": 1, b"z": 10, b"M": 1, b"A": 1, b"K": 1, b"d": 2}
 
 
-def _raster_run(data: bytes, i: int) -> tuple[int, int, int]:
+def _raster_run(data: bytes, i: int, compressed: bool) -> tuple[int, int, int]:
     """Consume raster lines from i; return (next index, lines, longest block)."""
     lines = longest = 0
     while i < len(data) and data[i] in (0x47, 0x5A):
@@ -100,14 +100,16 @@ def _raster_run(data: bytes, i: int) -> tuple[int, int, int]:
             i += 1
         else:
             n = data[i + 1] | data[i + 2] << 8
-            assert len(decode(data[i + 3 : i + 3 + n])) == 16, f"bad raster line at {i}"
+            block = data[i + 3 : i + 3 + n]
+            width = len(decode(block)) if compressed else len(block)
+            assert width == 16, f"bad raster line at {i}"
             longest = max(longest, n)
             i += 3 + n
         lines += 1
     return i, lines, longest
 
 
-def _one_command(data: bytes, i: int) -> tuple[int, tuple[str, str]]:
+def _one_command(data: bytes, i: int, compressed: bool) -> tuple[int, tuple[str, str]]:
     """Parse the command at i; return (next index, (name, value))."""
     if data[i] == 0x00:
         j = i
@@ -122,7 +124,9 @@ def _one_command(data: bytes, i: int) -> tuple[int, tuple[str, str]]:
     if data[i] == 0x4D:
         return i + 2, ("compression", f"{data[i + 1]:02x}")
     if data[i] in (0x47, 0x5A):
-        j, lines, longest = _raster_run(data, i)
+        j, lines, longest = _raster_run(data, i, compressed)
+        if not compressed:
+            return j, ("raster", f"{lines} lines, uncompressed")
         size = "all blocks <= 17 bytes" if longest <= 17 else f"a block of {longest} bytes"
         return j, ("raster", f"{lines} lines, {size}")
     if data[i] in (0x0C, 0x1A):
@@ -133,11 +137,16 @@ def _one_command(data: bytes, i: int) -> tuple[int, tuple[str, str]]:
 def job_commands(data: bytes) -> list[tuple[str, str]]:
     """Read a raster print job back as readable (command, value) pairs.
 
-    Raster lines between two commands are summarised as one entry.
+    Raster lines between two commands are summarised as one entry; they
+    are read as PackBits after ``M 02`` and as plain 16-byte lines after
+    ``M 00``.
     """
     out: list[tuple[str, str]] = []
     i = 0
+    compressed = True
     while i < len(data):
-        i, cmd = _one_command(data, i)
+        i, cmd = _one_command(data, i, compressed)
+        if cmd[0] == "compression":
+            compressed = cmd[1] == "02"
         out.append(cmd)
     return out

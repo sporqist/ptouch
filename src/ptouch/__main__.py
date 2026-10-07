@@ -13,6 +13,7 @@ from PIL import Image, ImageFont
 from . import (
     Align,
     Connection,
+    ConnectionDevice,
     ConnectionNetwork,
     ConnectionUSB,
     HeatShrinkTube3_1_5_2mm,
@@ -26,6 +27,7 @@ from . import (
     HeatShrinkTube17_7mm,
     HeatShrinkTube23_6mm,
     Label,
+    PT2730,
     PTE550W,
     PTP710BT,
     PTP750W,
@@ -75,6 +77,7 @@ TUBE_WIDTHS = {
 
 # Mapping of printer names to printer classes
 PRINTER_TYPES = {
+    "2730": PT2730,
     "E550W": PTE550W,
     "P710BT": PTP710BT,
     "P750W": PTP750W,
@@ -172,6 +175,11 @@ Examples:
         metavar="URI",
         help="Use USB connection. Optional URI: usb://[vendor:]product[/serial] "
         "(e.g., usb://:0x2086/A1B2C3D4E5)",
+    )
+    conn_group.add_argument(
+        "--device",
+        metavar="PATH",
+        help="Printer device file, e.g. /dev/usb/lp0 (Linux usblp driver)",
     )
 
     # Printer and tape/tube
@@ -369,6 +377,8 @@ def main() -> int:  # noqa: C901 - pre-existing, inherited from upstream
     connection: Connection
     if args.host:
         connection = ConnectionNetwork(args.host)
+    elif args.device:
+        connection = ConnectionDevice(args.device)
     elif args.usb is True:
         # --usb without URI
         connection = ConnectionUSB()
@@ -386,7 +396,8 @@ def main() -> int:  # noqa: C901 - pre-existing, inherited from upstream
             return 1
 
     # Create printer
-    use_compression = not args.no_compression
+    # The PT-2730 is only known to print uncompressed (see PT2730).
+    use_compression = not (args.no_compression or printer_class is PT2730)
     printer = printer_class(
         connection,
         use_compression=use_compression,
