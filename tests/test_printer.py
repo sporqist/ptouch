@@ -1304,7 +1304,7 @@ class TestPT2730:
         assert printer.use_compression is False
 
     def test_measured_tape_use(self) -> None:
-        """Lead, tail, per-label feed and feed scale, measured 2026-10-07."""
+        """Lead, tail, per-label feed, feed scale: PROVISIONAL (one sample, 2026-10-07)."""
         assert PT2730.LEAD_MM == 24.5
         assert PT2730.TAIL_MM == 0.5
         assert PT2730.FEED_PER_LABEL_MM == 5.0
