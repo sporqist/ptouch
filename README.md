@@ -75,6 +75,11 @@ command sequences; changing them needs a new hardware check.
 | Printer | Firmware | Tape | Verified | What |
 |---------|----------|------|----------|------|
 | PT-E550W | FP-MAIN 1.31 | TZe-S251 (24mm) | 2026-10-06 | single label; two-label half-cut strip (`print_multi`); PackBits compression; over the network (port 9100); status over SNMP; watchdog states (`hrPrinterStatus` 3 idle, 4 while printing) |
+| PT-E550W | FP-MAIN 1.31 | TZe-S251 (24mm) | 2026-10-06 | high resolution from 360 dpi images (`high_resolution_image`, K bit 6, 28-dot margin, each line once); half-cut strip in high resolution; cut each N (`cut_each` 2 and 3); free hard cuts as chained jobs with cut each = piece size (pieces 2/1/3, one lead); chained jobs sent back to back on new connections |
+
+Not verified yet: cut each above 3 (e.g. 55-label pieces), more than three
+chained jobs in a run, and splitting one half-cut strip into several
+chained jobs.
 
 ### Tapes
 

@@ -910,15 +910,100 @@ class TestE550WVerifiedJobs:
     """
 
     @staticmethod
-    def _label() -> Label:
+    def _label(width: int = 84) -> Label:
         # A busy pattern, so raster lines need both PackBits runs and the
         # 17-byte literal fallback.
-        image = Image.new("RGB", (84, 128), "white")
-        for x in range(84):
+        image = Image.new("RGB", (width, 128), "white")
+        for x in range(width):
             for y in range(128):
                 if (x * 7 + y * 3 + (x * y) % 5) % 4 < 2:
                     image.putpixel((x, y), (0, 0, 0))
         return Label(image, Tape24mm)
+
+    @staticmethod
+    def _hires_page(
+        z_lines: str, page: int, mode: str, cut_each: str | None, k: str
+    ) -> list[tuple[str, str]]:
+        """One high-resolution page header (360 dpi image, margin 28)."""
+        return [
+            ("ESC i a", "01"),
+            ("ESC i z", f"86 01 18 00 {z_lines} 00 00 00 {page:02x} 00"),
+            ("ESC i M", mode),
+            *([("ESC i A", cut_each)] if cut_each else []),
+            ("ESC i K", k),
+            ("ESC i d", "1c 00"),  # 28 dots = 2 mm at 360 dpi
+            ("compression", "02"),
+        ]
+
+    def test_free_hard_cuts_h1(self, mock_connection: MockConnection) -> None:
+        """H1: pieces of 2, 1 and 3 labels as three chained jobs, high resolution.
+
+        Verified 2026-10-06: one lead for the whole run, full cuts exactly
+        after labels 2, 3 and 6, half cuts inside the pieces. Every page of
+        a job has auto cut, half cut and cut each = piece size; all jobs
+        but the last are chained (K 44), the last is not (K 4c). The labels
+        were 180 columns at 360 dpi.
+        """
+        printer = PTE550W(mock_connection)
+        pieces = [2, 1, 3]
+        jobs = [
+            printer.build_job(
+                [self._label(180) for _ in range(n)],
+                cut_each=n,
+                chain=i < len(pieces) - 1,
+                half_cut=True,
+                auto_cut=True,
+                high_resolution_image=True,
+            )
+            for i, n in enumerate(pieces)
+        ]
+        raster = ("raster", "180 lines, all blocks <= 17 bytes")
+        assert job_commands(jobs[0]) == [
+            *self._hires_page("b4", 0, "40", "02", "44"),  # chain + half cut + high res
+            raster,
+            ("print", "0c"),
+            *self._hires_page("b4", 1, "40", "02", "44"),
+            raster,
+            ("print + feed", "1a"),
+        ]
+        assert job_commands(jobs[1]) == [
+            *self._hires_page("b4", 0, "40", "01", "44"),
+            raster,
+            ("print + feed", "1a"),
+        ]
+        assert job_commands(jobs[2]) == [
+            *self._hires_page("b4", 0, "40", "03", "4c"),  # last job: no chain
+            raster,
+            ("print", "0c"),
+            *self._hires_page("b4", 1, "40", "03", "4c"),
+            raster,
+            ("print", "0c"),
+            *self._hires_page("b4", 1, "40", "03", "4c"),
+            raster,
+            ("print + feed", "1a"),
+        ]
+
+    def test_high_resolution_strip_mid(self, mock_connection: MockConnection) -> None:
+        """The MID asset label strip: two 205-column labels, half cuts, auto cut off.
+
+        Verified 2026-10-06 (asset label WZ00042 and a user label in one
+        strip): one piece, half cut between the labels, full cut at the end.
+        """
+        job = PTE550W(mock_connection).build_job(
+            [self._label(205), self._label(205)],
+            auto_cut=False,
+            half_cut=True,
+            high_resolution_image=True,
+        )
+        raster = ("raster", "205 lines, all blocks <= 17 bytes")
+        assert job_commands(job) == [
+            *self._hires_page("cd", 0, "00", None, "4c"),
+            raster,
+            ("print", "0c"),
+            *self._hires_page("cd", 1, "00", None, "4c"),
+            raster,
+            ("print + feed", "1a"),
+        ]
 
     def test_single_label(self, mock_connection: MockConnection) -> None:
         """One label: auto cut, cut each label, no half cut, feed at the end."""
