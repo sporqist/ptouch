@@ -54,7 +54,7 @@ Comprehensive documentation is available at [ptouch.readthedocs.io](https://ptou
 
 | Printer | Resolution | High-Res | Pins | Max Tape Width | Class |
 |---------|------------|----------|------|----------------|-------|
-| PT-2730 (minimal command set) | 180 DPI | - | 128 | 24mm | `PT2730` |
+| PT-2730 (minimal command set, barely tested) | 180 DPI | - | 128 | 24mm | `PT2730` |
 | PT-E550W | 180 DPI | 360 DPI | 128 | 24mm | `PTE550W` |
 | PT-P710BT | 180 DPI | 360 DPI | 128 | 24mm | `PTP710BT` |
 | PT-P750W | 180 DPI | 360 DPI | 128 | 24mm | `PTP750W` |
@@ -74,7 +74,8 @@ Comprehensive documentation is available at [ptouch.readthedocs.io](https://ptou
 > `1A` at the end. `ESC i a`, `ESC i z`, `ESC i A`, `ESC i d`, `M`
 > (compression) and high resolution are never sent; asking for compression,
 > high resolution, a margin, cut-each, special tape or a precut raises
-> `ValueError`. The printer adds its own blank tape: 24.5 mm before the
+> `ValueError`. The printer adds its own blank tape (**provisional figures**,
+> from a handful of prints and one ruler label; verification prints pending): 24.5 mm before the
 > first printed line and about 0.5 mm after a single cut label
 > (`LEAD_MM`, `TAIL_MM`), roughly 4-5 mm per label in a multi-label job
 > (`FEED_PER_LABEL_MM`, approximate). It also feeds about 2.9 % short
@@ -102,7 +103,7 @@ command sequences; changing them needs a new hardware check.
 | Printer | Firmware | Tape | Verified | What |
 |---------|----------|------|----------|------|
 | PT-E550W | FP-MAIN 1.31 | TZe-S251 (24mm) | 2026-10-06 | single label; two-label half-cut strip (`print_multi`); PackBits compression; over the network (port 9100); status over SNMP; watchdog states (`hrPrinterStatus` 3 idle, 4 while printing) |
-| PT-2730 | - | TZe 24mm laminated | 2026-10-07 | printing with the minimal command set (`LEGACY_COMMANDS`) over `/dev/usb/lp0`: single label, with and without auto cut (`ESC i M 40`); two labels cut each (`ESC i K 08`, `0C` between); two labels uncut (no M/K); `ESC i S` status; 4-dot QR modules at 180 dpi scan; tape use and feed scale measured (see `PT2730`) |
+| PT-2730 | - | TZe 24mm laminated | 2026-10-07 | printing with the minimal command set (`LEGACY_COMMANDS`) over `/dev/usb/lp0`: single label, with and without auto cut (`ESC i M 40`); two labels cut each (`ESC i K 08`, `0C` between); two labels uncut (no M/K); `ESC i S` status; 4-dot QR modules at 180 dpi scan; tape use and feed scale measured once, provisional (see `PT2730`) |
 | PT-E550W | FP-MAIN 1.31 | TZe-S251 (24mm) | 2026-10-06 | high resolution from 360 dpi images (`high_resolution_image`, K bit 6, 28-dot margin, each line once); half-cut strip in high resolution; cut each N (`cut_each` 2 and 3); free hard cuts as chained jobs with cut each = piece size (pieces 2/1/3, one lead); chained jobs sent back to back on new connections |
 
 Not verified yet on the PT-2730: chain (`ESC i M 40` without `K 08`),

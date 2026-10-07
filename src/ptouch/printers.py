@@ -114,9 +114,10 @@ class PTP710BT(PTE550W):
 class PT2730(LabelPrinter):
     """Brother PT-2730 label printer (128 pins, 180 DPI, USB only).
 
-    Printing verified on hardware (2026-10-07, USB through ``/dev/usb/lp0``,
-    24 mm TZe laminated tape, status model code 63h) with the legacy
-    command set (``LEGACY_COMMANDS``, see :class:`~ptouch.printer.LabelPrinter`):
+    First prints on hardware (2026-10-07, USB through ``/dev/usb/lp0``,
+    24 mm TZe laminated tape, status model code 63h; a handful of jobs, so
+    barely tested) with the legacy command set (``LEGACY_COMMANDS``, see
+    :class:`~ptouch.printer.LabelPrinter`):
 
     - The PT-E550W-style job (ESC i a, ESC i z, ESC i M, ESC i A, ESC i K,
       ESC i d, M 00, uncompressed lines, 1A) hangs the printer: it stays
@@ -131,7 +132,10 @@ class PT2730(LabelPrinter):
       piece (about 61 mm blank in front).
 
     The margin cannot be set (no ESC i d); the printer adds its own blank
-    tape. Measured 2026-10-07 on 24 mm TZe:
+    tape. Measured 2026-10-07 on 24 mm TZe from a handful of single prints
+    and one ruler label. These figures and the constants built from them
+    (``FEED_SCALE``, ``LEAD_MM``, ``TAIL_MM``, ``FEED_PER_LABEL_MM``) are
+    **provisional** until verification prints confirm them:
 
     - Feed pitch: on a 60 mm ruler label (425 lines, a full-height line at
       dot 423 = 59.7 mm nominal) the first to the last line measured
@@ -193,8 +197,10 @@ class PT2730(LabelPrinter):
     SUPPORTS_PAGE_NUMBER_CUTS = False
     SUPPORTS_SPECIAL_TAPE = False
 
-    # Tape use for length estimates, measured 2026-10-07 on 24 mm TZe (no
-    # ESC i d to change any of it). See the class docstring.
+    # PROVISIONAL: tape use for length estimates, from a handful of single
+    # prints and one ruler measurement on 2026-10-07 (24 mm TZe; no ESC i d
+    # to change any of it). To be confirmed by verification prints; do not
+    # rely on them for exact lengths yet. See the class docstring.
     # Feed correction, measured once 2026-10-07 (+-0.5 mm): 423 dots
     # (59.7 mm nominal) printed 58 mm long. Stretch factor along the tape.
     FEED_SCALE: float = 59.7 / 58
