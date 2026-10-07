@@ -1279,7 +1279,7 @@ class TestBuildJob:
 
 
 class TestPT2730:
-    """PT-2730 model attributes (from published sources, see printers.py)."""
+    """PT-2730 model attributes (see printers.py for the sources)."""
 
     def test_usb_product_id(self) -> None:
         """04F9:2041 as in ptouch-print's device table and usb.ids."""
@@ -1293,13 +1293,39 @@ class TestPT2730:
         assert PT2730.RESOLUTION_DPI_HIGH == 0
 
     def test_capabilities(self, mock_connection: MockConnection) -> None:
-        """Full cutter and chain, no half cut, uncompressed by default."""
+        """Legacy commands: cutter and chain; no half cut, cut-each, special tape."""
         printer = PT2730(mock_connection)
+        assert printer.LEGACY_COMMANDS
         assert not printer.supports_high_resolution
         assert not printer.SUPPORTS_HALF_CUT
+        assert not printer.SUPPORTS_PAGE_NUMBER_CUTS
+        assert not printer.SUPPORTS_SPECIAL_TAPE
         assert printer.SUPPORTS_AUTO_CUT and printer.SUPPORTS_CHAIN_PRINTING
         assert printer.use_compression is False
-        assert printer.TAPE_MEDIA_TYPE == MediaType.LAMINATED_TAPE
+
+    def test_measured_tape_use(self) -> None:
+        """Lead, tail, per-label feed and feed scale, measured 2026-10-07."""
+        assert PT2730.LEAD_MM == 24.5
+        assert PT2730.TAIL_MM == 0.5
+        assert PT2730.FEED_PER_LABEL_MM == 5.0
+        assert PT2730.FEED_SCALE == pytest.approx(1.029, abs=0.001)
+
+    def test_feed_scale_helpers(self, mock_connection: MockConnection) -> None:
+        """The ruler: dot 423 (59.7 mm nominal) printed at 58 mm."""
+        printer = PT2730(mock_connection)
+        assert printer.printed_length_mm(423) == pytest.approx(58.0, abs=0.05)
+        assert printer.raster_lines_for_mm(60) == 438
+        assert printer.printed_length_mm(438) == pytest.approx(60.0, abs=0.1)
+        # Models without a measured correction: nominal resolution.
+        assert PTE550W(MockConnection()).raster_lines_for_mm(60) == 425
+        assert PTE550W.FEED_SCALE == 1.0
+
+    def test_stretch_for_feed(self, mock_connection: MockConnection) -> None:
+        """Opt-in stretch along the tape; height and other models unchanged."""
+        image = Image.new("1", (425, 128), 1)
+        stretched = PT2730(mock_connection).stretch_for_feed(image)
+        assert stretched.size == (437, 128)
+        assert PTE550W(MockConnection()).stretch_for_feed(image) is image
 
     def test_tapes_up_to_24mm(self, mock_connection: MockConnection) -> None:
         """TZe 3.5 to 24 mm; no 36 mm, no heat shrink tube."""
@@ -1310,26 +1336,89 @@ class TestPT2730:
         with pytest.raises(ValueError, match="not supported"):
             printer.get_tape_config(Tape36mm())
 
-    def test_half_cut_refused(self, mock_connection: MockConnection) -> None:
-        """Asking for a half cut is an error, not a silent full cut."""
-        with pytest.raises(ValueError, match="half-cut"):
-            PT2730(mock_connection).build_page(TestPT2730Jobs._label(), half_cut=True)
+
+class TestPT2730Refusals:
+    """What the PT-2730 cannot be told is an error, not silently dropped."""
+
+    def test_compression_refused(self, mock_connection: MockConnection) -> None:
+        """No M command: compression raises, before anything is sent."""
+        with pytest.raises(ValueError, match="compression"):
+            PT2730(mock_connection, use_compression=True)
+        assert mock_connection.data == b""
+        printer = PT2730(mock_connection)
+        printer.use_compression = True
+        with pytest.raises(ValueError, match="compression"):
+            printer.build_page(TestPT2730Jobs._label())
 
     def test_high_resolution_refused(self, mock_connection: MockConnection) -> None:
-        """No ESC i K bit 6 on a printer without high resolution."""
+        """No high resolution, whichever way it is asked for."""
+        with pytest.raises(ValueError, match="high resolution"):
+            PT2730(mock_connection, high_resolution=True)
         printer = PT2730(mock_connection)
         with pytest.raises(ValueError, match="high resolution"):
             printer.build_page(TestPT2730Jobs._label(), high_resolution=True)
         with pytest.raises(ValueError, match="high resolution"):
             printer.build_page(TestPT2730Jobs._label(), high_resolution_image=True)
 
+    def test_margin_refused(self, mock_connection: MockConnection) -> None:
+        """No ESC i d: an explicit margin raises."""
+        printer = PT2730(mock_connection)
+        with pytest.raises(ValueError, match="margin"):
+            printer.build_page(TestPT2730Jobs._label(), margin_mm=2.0)
+        with pytest.raises(ValueError, match="margin"):
+            printer.build_job([TestPT2730Jobs._label()], margin_mm=2.0)
+
+    def test_cut_options_refused(self, mock_connection: MockConnection) -> None:
+        """No ESC i A (cut each), no half cut, no special-tape bit."""
+        printer = PT2730(mock_connection)
+        label = TestPT2730Jobs._label()
+        with pytest.raises(ValueError, match="cut_each"):
+            printer.build_job([label, label], cut_each=2)
+        with pytest.raises(ValueError, match="half-cut"):
+            printer.build_page(label, half_cut=True)
+        with pytest.raises(ValueError, match="special-tape"):
+            printer.build_page(label, special_tape=True)
+
+    def test_precut_refused(self, mock_connection: MockConnection) -> None:
+        """The precut sequence needs ESC i z and ESC i d."""
+        printer = PT2730(mock_connection)
+        with pytest.raises(ValueError, match="precut"):
+            printer.precut(Tape24mm())
+
+    def test_validator_refuses_newer_commands(self, mock_connection: MockConnection) -> None:
+        """A PT-E550W-style job (the one that hung the PT-2730) does not validate."""
+        from ptouch.validate import InvalidJobError, validate_job
+
+        e550w = PTE550W(MockConnection(), use_compression=False)
+        job = e550w.build_job([TestPT2730Jobs._label()])
+        with pytest.raises(InvalidJobError, match="ESC i R 01"):
+            validate_job(job, PT2730(mock_connection))
+        header = b"\x1biR\x01\x1biM\x40"
+        line = b"G\x10\x00" + b"\xff" * 16
+        for bad in (
+            header + b"\x1bid\x0e\x00" + line + b"\x1a",  # margin
+            header + b"M\x00" + line + b"\x1a",  # compression
+            header + b"\x1biK\x08\x1biK\x08" + line + b"\x1a",  # K twice
+            b"\x1biR\x01\x1biK\x08" + line + b"\x1a",  # K without auto cut
+            header + line + b"\x0c" + b"\x1biM\x40" + line + b"\x1a",  # header again
+            header + b"Z" + b"\x1a",  # zero line
+            header + b"\x1a",  # no lines
+            header + line + b"\x0c",  # no 1A
+        ):
+            with pytest.raises(InvalidJobError):
+                validate_job(bad, PT2730(MockConnection()))
+
 
 class TestPT2730Jobs:
-    """Command sequences the PT-2730 gets. NOT yet verified on hardware.
+    """Command sequences the PT-2730 gets (legacy command set).
 
-    The same grammar as the PT-E550W jobs, without compression and without
-    half cuts. When a sequence has been printed on a real PT-2730, say so
-    here and in the README's "Verified on hardware" table.
+    Verified on hardware 2026-10-07 (PT-2730 over /dev/usb/lp0, 24 mm TZe
+    laminated): ESC i R 01 + lines + 1A prints; adding ESC i M 40 cuts
+    cleanly; ESC i R 01, ESC i M 40, ESC i K 08, page, 0C, page, 1A gives
+    separately cut labels; the same pages without M and K one uncut piece.
+    The PT-E550W sequence (ESC i a, z, M, A, K, d, M 00) hung the printer.
+    Changing a verified sequence needs a new hardware check; update the
+    README's "Verified on hardware" table too.
     """
 
     @staticmethod
@@ -1340,55 +1429,97 @@ class TestPT2730Jobs:
                 image.putpixel((x, y), (0, 0, 0))
         return Label(image, Tape24mm)
 
-    @staticmethod
-    def _page(page: int, k: str) -> list[tuple[str, str]]:
-        return [
-            ("ESC i a", "01"),  # raster mode
-            ("ESC i z", f"86 01 18 00 54 00 00 00 {page:02x} 00"),  # laminated, 24 mm, 84 lines
-            ("ESC i M", "40"),  # auto cut
-            ("ESC i A", "01"),  # cut each label
-            ("ESC i K", k),
-            ("ESC i d", "0e 00"),  # 14-dot margin (2 mm)
-            ("compression", "00"),  # none
-            ("raster", "84 lines, uncompressed"),
-        ]
+    PREAMBLE = [("invalidate", "100 x 00"), ("initialize", "1b 40")]
+    LINES = ("raster", "84 lines, uncompressed")
 
-    def test_single_label(self, mock_connection: MockConnection) -> None:
-        """One label: auto (full) cut, plain 16-byte raster lines, feed."""
+    def test_single_label_cut(self, mock_connection: MockConnection) -> None:
+        """One cut label: R 01 + M 40 (verified to cut cleanly) + K 08.
+
+        K 08 as in the verified two-label job (cut after the last label).
+        """
         PT2730(mock_connection).print(self._label())
-        assert job_commands(mock_connection.data) == [
-            ("invalidate", "100 x 00"),
-            ("initialize", "1b 40"),
-            *self._page(0, "08"),  # no chain printing
+        assert job_commands(mock_connection.data, compressed=False) == [
+            *self.PREAMBLE,
+            ("ESC i R", "01"),  # raster mode (legacy)
+            ("ESC i M", "40"),  # auto cut
+            ("ESC i K", "08"),  # no chain: feed and cut after the last label
+            self.LINES,
             ("print + feed", "1a"),
         ]
 
-    def test_strip_gets_full_cuts(self, mock_connection: MockConnection) -> None:
-        """print_multi falls back to full cuts: no half cut on this model."""
-        PT2730(mock_connection).print_multi([self._label(), self._label()])
-        assert job_commands(mock_connection.data) == [
-            ("invalidate", "100 x 00"),
-            ("initialize", "1b 40"),
-            *self._page(0, "08"),
+    def test_two_labels_cut_each(self, mock_connection: MockConnection) -> None:
+        """Verified: two separately cut labels, header once, 0C between."""
+        printer = PT2730(mock_connection)
+        job = printer.build_job([self._label(), self._label()])
+        assert job_commands(job, compressed=False) == [
+            ("ESC i R", "01"),
+            ("ESC i M", "40"),
+            ("ESC i K", "08"),
+            self.LINES,
             ("print", "0c"),
-            *self._page(1, "08"),
+            self.LINES,
+            ("print + feed", "1a"),
+        ]
+
+    def test_print_multi_is_the_same_job(self, mock_connection: MockConnection) -> None:
+        """print_multi falls back to full cuts (no half cut): the same bytes."""
+        printer = PT2730(mock_connection)
+        printer.print_multi([self._label(), self._label()])
+        sent = mock_connection.data[len(printer.preamble()) :]
+        assert sent == printer.build_job([self._label(), self._label()])
+
+    def test_no_cut(self, mock_connection: MockConnection) -> None:
+        """Verified: without M and K the labels come out as one uncut piece."""
+        printer = PT2730(mock_connection)
+        job = printer.build_job([self._label(), self._label()], auto_cut=False)
+        assert job_commands(job, compressed=False) == [
+            ("ESC i R", "01"),
+            self.LINES,
+            ("print", "0c"),
+            self.LINES,
             ("print + feed", "1a"),
         ]
 
     def test_chained_job(self, mock_connection: MockConnection) -> None:
-        """Chain: K 00, so the last label is not fed and cut."""
+        """Chain: auto cut without K 08. NOT yet verified on hardware.
+
+        The uncut two-label job that was verified had neither M nor K.
+        """
         printer = PT2730(mock_connection)
         job = printer.build_job([self._label(), self._label()], chain=True)
-        assert job_commands(job) == [
-            *self._page(0, "00"),
+        assert job_commands(job, compressed=False) == [
+            ("ESC i R", "01"),
+            ("ESC i M", "40"),
+            self.LINES,
             ("print", "0c"),
-            *self._page(1, "00"),
+            self.LINES,
             ("print + feed", "1a"),
         ]
 
+    def test_mirror(self, mock_connection: MockConnection) -> None:
+        """Mirror sets ESC i M bit 7. NOT yet verified on hardware."""
+        printer = PT2730(mock_connection)
+        page = printer.build_page(self._label(), mirror=True)
+        assert job_commands(page, compressed=False)[:3] == [
+            ("ESC i R", "01"),
+            ("ESC i M", "c0"),
+            ("ESC i K", "08"),
+        ]
+
+    def test_raster_lines(self, mock_connection: MockConnection) -> None:
+        """Every line is G 10 00 and 16 plain bytes, as sent on hardware."""
+        job = PT2730(mock_connection).build_job([self._label()], auto_cut=False)
+        lines = job[4:-1]
+        assert len(lines) == 84 * 19
+        assert all(lines[i : i + 3] == b"G\x10\x00" for i in range(0, len(lines), 19))
+        assert lines[3:19] == b"\xff" * 16  # column 0 is black on all 128 pins
+
     def test_jobs_validate(self, mock_connection: MockConnection) -> None:
-        """The validator accepts the uncompressed lines (16 bytes each)."""
+        """The validator reads the legacy grammar, page by page."""
         printer = PT2730(mock_connection)
         summary = printer.send_job(printer.build_job([self._label()] * 3))
         assert [p.compressed for p in summary.pages] == [False] * 3
+        assert [p.auto_cut for p in summary.pages] == [True] * 3
+        assert [p.chain for p in summary.pages] == [False] * 3
+        assert [p.last for p in summary.pages] == [False, False, True]
         assert summary.raster_lines == 3 * 84

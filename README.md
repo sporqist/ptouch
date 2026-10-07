@@ -54,7 +54,7 @@ Comprehensive documentation is available at [ptouch.readthedocs.io](https://ptou
 
 | Printer | Resolution | High-Res | Pins | Max Tape Width | Class |
 |---------|------------|----------|------|----------------|-------|
-| PT-2730 (not yet verified on hardware) | 180 DPI | - | 128 | 24mm | `PT2730` |
+| PT-2730 (minimal command set) | 180 DPI | - | 128 | 24mm | `PT2730` |
 | PT-E550W | 180 DPI | 360 DPI | 128 | 24mm | `PTE550W` |
 | PT-P710BT | 180 DPI | 360 DPI | 128 | 24mm | `PTP710BT` |
 | PT-P750W | 180 DPI | 360 DPI | 128 | 24mm | `PTP750W` |
@@ -63,19 +63,31 @@ Comprehensive documentation is available at [ptouch.readthedocs.io](https://ptou
 | PT-P910BT | 360 DPI | 720 DPI | 560 | 36mm | `PTP910BT` |
 | PT-P950NW | 360 DPI | 720 DPI | 560 | 36mm | `PTP950NW` |
 
-> **PT-2730 hardware notes (not yet verified on hardware):** USB only
-> (04F9:2041), TZe tape up to 24 mm, automatic full cutter, no half cut
-> and no high resolution. Brother publishes no raster command reference for
-> it; the class follows the PT-2730 User's Guide, ptouch-print's device
-> table and the PT-E550W family reference (see `PT2730` in
-> `src/ptouch/printers.py` for which value comes from where). Jobs are sent
-> uncompressed, as ptouch-print does. Turn **Editor Lite** (mass storage
-> mode) off before printing: in that mode the printer shows up as a USB
-> drive and does not take raster data. On Linux the `usblp` driver offers
-> the printer as `/dev/usb/lp0`; `ConnectionDevice("/dev/usb/lp0")` prints
-> through it without libusb (the user needs access to the node, usually the
-> `lp` group). ptouch-print notes that the PT-2730 was reported to need
-> some blank space before the content; check the first label's leading edge.
+> **PT-2730 hardware notes:** USB only (04F9:2041, status model code
+> 63h), TZe tape up to 24 mm, automatic full cutter, no half cut and no
+> high resolution. The PT-2730 hangs on the newer raster commands (it stays
+> on "receiving data" until switched off), so `PT2730` sets
+> `LEGACY_COMMANDS` and gets only the minimal command set that was verified
+> on hardware: invalidate, `ESC @`, `ESC i R 01`, `ESC i M 40` (auto cut;
+> bit 7 mirror), `ESC i K 08` (cut after the last label; left out for
+> chain), uncompressed `G 10 00` + 16 byte raster lines, `0C` between pages,
+> `1A` at the end. `ESC i a`, `ESC i z`, `ESC i A`, `ESC i d`, `M`
+> (compression) and high resolution are never sent; asking for compression,
+> high resolution, a margin, cut-each, special tape or a precut raises
+> `ValueError`. The printer adds its own blank tape: 24.5 mm before the
+> first printed line and about 0.5 mm after a single cut label
+> (`LEAD_MM`, `TAIL_MM`), roughly 4-5 mm per label in a multi-label job
+> (`FEED_PER_LABEL_MM`, approximate). It also feeds about 2.9 % short
+> (about 185 instead of 180 lines per inch, measured once, +-0.5 mm):
+> `FEED_SCALE` is the stretch factor, applied only on request with
+> `printer.stretch_for_feed(image)` or `printer.raster_lines_for_mm(mm)`.
+> For a while after a job `ESC i S` reports status type 6 (phase change),
+> phase type 1 (printing); that is normal, not a hang. Turn **Editor Lite**
+> (mass storage mode) off before printing: in that mode the printer shows
+> up as a USB drive and does not take raster data. On Linux the `usblp`
+> driver offers the printer as `/dev/usb/lp0`; `ConnectionDevice("/dev/usb/lp0")`
+> prints through it without libusb (the user needs access to the node,
+> usually the `lp` group).
 
 > **Note:** The PT-P710BT is a basic consumer model and does **not** support half-cut or heat shrink tubes. Its firmware ignores the half-cut command, so use `--full-cut` for multi-label jobs to get a cut between labels.
 
@@ -90,7 +102,12 @@ command sequences; changing them needs a new hardware check.
 | Printer | Firmware | Tape | Verified | What |
 |---------|----------|------|----------|------|
 | PT-E550W | FP-MAIN 1.31 | TZe-S251 (24mm) | 2026-10-06 | single label; two-label half-cut strip (`print_multi`); PackBits compression; over the network (port 9100); status over SNMP; watchdog states (`hrPrinterStatus` 3 idle, 4 while printing) |
+| PT-2730 | - | TZe 24mm laminated | 2026-10-07 | printing with the minimal command set (`LEGACY_COMMANDS`) over `/dev/usb/lp0`: single label, with and without auto cut (`ESC i M 40`); two labels cut each (`ESC i K 08`, `0C` between); two labels uncut (no M/K); `ESC i S` status; 4-dot QR modules at 180 dpi scan; tape use and feed scale measured (see `PT2730`) |
 | PT-E550W | FP-MAIN 1.31 | TZe-S251 (24mm) | 2026-10-06 | high resolution from 360 dpi images (`high_resolution_image`, K bit 6, 28-dot margin, each line once); half-cut strip in high resolution; cut each N (`cut_each` 2 and 3); free hard cuts as chained jobs with cut each = piece size (pieces 2/1/3, one lead); chained jobs sent back to back on new connections |
+
+Not verified yet on the PT-2730: chain (`ESC i M 40` without `K 08`),
+mirror, tapes other than 24 mm. The tests in `TestPT2730Jobs` pin its
+verified sequences.
 
 Not verified yet: cut each above 3 (e.g. 55-label pieces), more than three
 chained jobs in a run, and splitting one half-cut strip into several

@@ -110,6 +110,58 @@ class LabelPrinter(ABC):
     DEFAULT_CHAIN_PRINTING: bool = False
     DEFAULT_SPECIAL_TAPE: bool = False
 
+    # Legacy (minimal) command set, for older models that hang on the
+    # newer control codes (the PT-2730 stays on "receiving data" until it
+    # is switched off). A job for such a printer is only:
+    #
+    #   ESC i R 01     raster mode (instead of ESC i a 01)
+    #   ESC i M n      only when n is not 0: 40h auto cut, 80h mirror
+    #   ESC i K 08     only with auto cut and without chain (feed and cut
+    #                  after the last label)
+    #   G 10 00 ...    uncompressed raster lines
+    #   0C / 1A        between pages / after the last page
+    #
+    # The header goes once, before the first page; later pages are raster
+    # lines and their print command only. ESC i z, ESC i A, ESC i d and M
+    # (compression) are never sent, so the margin cannot be set (the
+    # printer adds its own feed), there is no cut-each, no compression, no
+    # high resolution and no special-tape mode; asking for any of them
+    # raises ValueError. Subclasses that set this also set the
+    # SUPPORTS_* flags accordingly.
+    LEGACY_COMMANDS: bool = False
+
+    # Feed correction along the tape: the factor an image must be
+    # stretched by (more raster lines) so that its physical length comes
+    # out true. A printer that moves the tape short per raster line has a
+    # value above 1. 1.0 unless measured for a model (see PT2730). Nothing
+    # applies it implicitly; use stretch_for_feed / raster_lines_for_mm.
+    FEED_SCALE: float = 1.0
+
+    def raster_lines_for_mm(self, length_mm: float) -> int:
+        """Raster lines (base resolution) that print ``length_mm`` long.
+
+        Includes ``FEED_SCALE``; on a model without a correction this is
+        the nominal ``length_mm`` at ``RESOLUTION_DPI``.
+        """
+        return round(length_mm / 25.4 * self.RESOLUTION_DPI * self.FEED_SCALE)
+
+    def printed_length_mm(self, raster_lines: int) -> float:
+        """Physical length in mm of ``raster_lines`` lines at base resolution."""
+        return raster_lines / self.RESOLUTION_DPI * 25.4 / self.FEED_SCALE
+
+    def stretch_for_feed(self, image: Image.Image) -> Image.Image:
+        """Opt in to ``FEED_SCALE``: stretch ``image`` along the tape.
+
+        The image's width (the tape direction) is scaled by ``FEED_SCALE``
+        with nearest-neighbour resampling, so a label drawn at the nominal
+        ``RESOLUTION_DPI`` comes out at its physical length. Returns the
+        image unchanged when ``FEED_SCALE`` is 1.
+        """
+        if self.FEED_SCALE == 1.0:
+            return image
+        width = max(1, round(image.width * self.FEED_SCALE))
+        return image.resize((width, image.height), Image.Resampling.NEAREST)
+
     @property
     def supports_high_resolution(self) -> bool:
         """Whether the printer supports high resolution mode."""
@@ -193,6 +245,12 @@ class LabelPrinter(ABC):
         high_resolution : bool or None, optional
             Whether to use high resolution mode. Defaults to class setting.
         """
+        if self.LEGACY_COMMANDS:
+            # Checked before connecting: nothing is sent for a refused setup.
+            if use_compression:
+                raise ValueError(f"{type(self).__name__} does not support compression")
+            if high_resolution and not self.supports_high_resolution:
+                raise ValueError(f"{type(self).__name__} does not support high resolution")
         self.connection = connection
         # Upper bound for pages in one job; None = no limit (see send_job).
         self.max_pages: int | None = None
@@ -253,6 +311,39 @@ class LabelPrinter(ABC):
     def _cmd_raster_mode(self) -> bytes:
         """Set printer to raster graphics mode (ESC i a)."""
         return struct.pack("BBBB", 0x1B, 0x69, 0x61, 0x01)
+
+    def _cmd_raster_mode_legacy(self) -> bytes:
+        """Set printer to raster graphics mode the old way (ESC i R 01).
+
+        Used instead of ESC i a on printers with ``LEGACY_COMMANDS``.
+        """
+        return struct.pack("BBBB", 0x1B, 0x69, 0x52, 0x01)
+
+    def _build_legacy_header(
+        self, auto_cut: bool, chain_printing: bool, mirror_print: bool
+    ) -> bytes:
+        """Job header for a ``LEGACY_COMMANDS`` printer (see there).
+
+        ``ESC i R 01``, then ``ESC i M`` only when it has a bit set, then
+        ``ESC i K 08`` only with auto cut and without chain.
+        """
+        header = self._cmd_raster_mode_legacy()
+        mode = self._cmd_mode_settings(auto_cut=auto_cut, mirror_print=mirror_print)
+        if mode[3]:
+            header += mode
+        if auto_cut and not chain_printing:
+            header += self._cmd_advanced_mode_settings(chain_printing=False)
+        return header
+
+    def _check_legacy_page(self, margin_mm: float | None, high_res: bool) -> None:
+        """Refuse what a ``LEGACY_COMMANDS`` printer cannot be told."""
+        name = type(self).__name__
+        if self.use_compression:
+            raise ValueError(f"{name} does not support compression")
+        if high_res:
+            raise ValueError(f"{name} does not support high resolution")
+        if margin_mm is not None:
+            raise ValueError(f"{name} does not support setting the margin (no ESC i d)")
 
     def _cmd_print_information(
         self,
@@ -657,7 +748,15 @@ class LabelPrinter(ABC):
         tape : Tape
             Tape currently loaded — used only to populate the page-info
             command with the correct media type and width.
+
+        Raises
+        ------
+        ValueError
+            On a ``LEGACY_COMMANDS`` printer: the precut sequence needs
+            ESC i z and ESC i d, which such a printer does not take.
         """
+        if self.LEGACY_COMMANDS:
+            raise ValueError(f"{type(self).__name__} does not support precut")
         control_seq = self._build_page_control_sequence(
             num_lines=0,
             margin=self._mm_to_dots(self.DEFAULT_MARGIN_MM),
@@ -816,10 +915,14 @@ class LabelPrinter(ABC):
             or if ``cut_each`` is outside 1-99 or set without auto cut, or
             if high resolution or ``high_resolution_image`` is asked of a
             printer without high resolution (``RESOLUTION_DPI_HIGH = 0``),
-            or ``high_resolution_image`` comes with ``high_resolution=False``.
+            or ``high_resolution_image`` comes with ``high_resolution=False``,
+            or, on a ``LEGACY_COMMANDS`` printer, if compression is on or
+            ``margin_mm`` is given.
         """
         # Resolve high_resolution setting
         high_res = self._resolve_high_resolution(high_resolution, high_resolution_image)
+        if self.LEGACY_COMMANDS:
+            self._check_legacy_page(margin_mm, high_res)
 
         tape_config = self.get_tape_config(label.tape)
         label.prepare(tape_config.print_pins, self.RESOLUTION_DPI)
@@ -879,6 +982,16 @@ class LabelPrinter(ABC):
         )
 
         self._check_cut_each(cut_each, auto_cut)
+
+        if self.LEGACY_COMMANDS:
+            # Header once, before the first page; then lines and 0C/1A.
+            header = (
+                self._build_legacy_header(auto_cut, chain_printing=chain, mirror_print=mirror)
+                if first_page
+                else b""
+            )
+            lines = self._build_raster_data(raster, num_lines, repeat_lines=False)
+            return header + lines + (b"\x1a" if feed else b"\x0c")
 
         control_seq = self._build_page_control_sequence(
             num_lines=num_lines,

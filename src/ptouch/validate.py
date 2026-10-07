@@ -22,6 +22,12 @@ flags, media and width, ``ESC i M``, ``ESC i A``, ``ESC i K``,
 ``ESC i d`` and compression); a PT-E550W cuts fully after every label
 when they change between pages. With cut-each N the job has a multiple
 of N pages.
+
+Printers with ``LEGACY_COMMANDS`` (PT-2730) get their own, smaller
+grammar: ``ESC i R 01``, then ``ESC i M`` (not 0) at most once and
+``ESC i K 08`` at most once (only with auto cut), before the first page
+only; every page is uncompressed ``G`` lines (at least one) and ``0C`` or
+``1A``. Any other command is refused: the PT-2730 hangs on the newer ones.
 """
 
 from __future__ import annotations
@@ -230,6 +236,63 @@ def _check_cut_each_pages(summary: JobSummary) -> None:
         raise InvalidJobError(f"{len(summary.pages)} pages is not a multiple of cut-each {each}")
 
 
+def _legacy_header(r: _Reader) -> tuple[int, int | None]:
+    """Read a legacy job header; return ESC i M and ESC i K (or None)."""
+    if r.take(4) != b"iR":
+        r.i -= 4
+        raise r.fail("page 0: expected ESC i R 01 (legacy raster mode)")
+    mode = 0
+    advanced: int | None = None
+    if r.peek(3) == b"iM":
+        r.take(3)
+        mode = r.take(1)[0]
+        if not mode or mode & ~_MODE_BITS:
+            raise r.fail(f"page 0: various mode {mode:#04x} (expected 40h and/or 80h)")
+    if r.peek(3) == b"iK":
+        r.take(3)
+        advanced = r.take(1)[0]
+        if advanced != 0x08:
+            raise r.fail(f"page 0: advanced mode {advanced:#04x} (only 08h is sent)")
+        if not mode & _AUTO_CUT:
+            raise r.fail("page 0: ESC i K 08 without auto cut")
+    return mode, advanced
+
+
+def _validate_legacy(data: bytes, printer: LabelPrinter, max_pages: int | None) -> JobSummary:
+    """Validate a job for a ``LEGACY_COMMANDS`` printer (see module doc)."""
+    r = _Reader(data)
+    summary = JobSummary()
+    mode, advanced = _legacy_header(r)
+    while True:
+        page = len(summary.pages)
+        if max_pages is not None and page >= max_pages:
+            raise r.fail(f"more than {max_pages} pages")
+        if r.peek() not in (b"G", b"", b""):
+            raise r.fail(f"page {page}: unexpected byte {r.peek().hex()} (only raster lines)")
+        lines = _raster(r, page, False, printer.BYTES_PER_LINE)
+        if not lines:
+            raise r.fail(f"page {page}: no raster lines")
+        last = r.take(1) == b""
+        summary.pages.append(
+            PageSummary(
+                raster_lines=lines,
+                margin_dots=0,
+                auto_cut=bool(mode & _AUTO_CUT),
+                half_cut=False,
+                chain=advanced is None,
+                high_resolution=False,
+                compressed=False,
+                last=last,
+            )
+        )
+        if last:
+            if r.i < len(data):
+                raise r.fail("data after the last page (1A)")
+            return summary
+        if r.i >= len(data):
+            raise r.fail(f"page {page}: job ends after 0C, without 1A")
+
+
 def validate_job(data: bytes, printer: LabelPrinter, max_pages: int | None = None) -> JobSummary:
     """Validate a job built for ``printer``.
 
@@ -252,6 +315,10 @@ def validate_job(data: bytes, printer: LabelPrinter, max_pages: int | None = Non
     InvalidJobError
         At the first byte that does not fit the grammar.
     """
+    if printer.LEGACY_COMMANDS:
+        if not data:
+            raise InvalidJobError("empty job")
+        return _validate_legacy(data, printer, max_pages)
     r = _Reader(data)
     summary = JobSummary()
     first: tuple[bytes, ...] | None = None

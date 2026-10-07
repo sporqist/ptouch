@@ -114,13 +114,53 @@ class PTP710BT(PTE550W):
 class PT2730(LabelPrinter):
     """Brother PT-2730 label printer (128 pins, 180 DPI, USB only).
 
-    Not yet verified on hardware. Brother publishes no raster command
-    reference for this model. The values below come from Brother's PT-2730
-    User's Guide (Specifications, Tape Cutting Options), the ``ptouch-print``
-    device table (git.familie-radermacher.ch/linux/ptouch-print.git,
-    ``src/libptouch.c``) and the linux-usb.org ``usb.ids`` list. Where those
-    say nothing, the PT-E550W/P750W/P710BT raster reference (same 128-pin,
-    180 dpi head) is used and the comment says "assumed".
+    Printing verified on hardware (2026-10-07, USB through ``/dev/usb/lp0``,
+    24 mm TZe laminated tape, status model code 63h) with the legacy
+    command set (``LEGACY_COMMANDS``, see :class:`~ptouch.printer.LabelPrinter`):
+
+    - The PT-E550W-style job (ESC i a, ESC i z, ESC i M, ESC i A, ESC i K,
+      ESC i d, M 00, uncompressed lines, 1A) hangs the printer: it stays
+      on "receiving data" until it is switched off. Which of those
+      commands it chokes on is not known.
+    - ESC i R 01, uncompressed lines, 1A prints. Without ESC i M the
+      printer's own menu setting decides about the cut.
+    - ESC i R 01, ESC i M 40, lines, 1A prints and cuts cleanly.
+    - ESC i R 01, ESC i M 40, ESC i K 08, page 1, 0C, page 2, 1A gives two
+      separately cut labels.
+    - The same two pages without ESC i M and ESC i K come out as one uncut
+      piece (about 61 mm blank in front).
+
+    The margin cannot be set (no ESC i d); the printer adds its own blank
+    tape. Measured 2026-10-07 on 24 mm TZe:
+
+    - Feed pitch: on a 60 mm ruler label (425 lines, a full-height line at
+      dot 423 = 59.7 mm nominal) the first to the last line measured
+      58 mm, so the tape moves about 2.9 % short (about 185 lines per inch
+      instead of 180). ``FEED_SCALE`` = 59.7/58 is the factor to stretch
+      an image along the tape by so physical lengths come out true;
+      nothing applies it unless asked (:meth:`~ptouch.printer.LabelPrinter.
+      stretch_for_feed`, :meth:`~ptouch.printer.LabelPrinter.raster_lines_for_mm`).
+    - Single cut label (ESC i R 01, ESC i M 40, lines, 1A): 24.5 mm blank
+      before the first printed line (``LEAD_MM``, print head to cutter),
+      83 mm whole piece, so about 0.5 mm after the content (``TAIL_MM``).
+    - Two labels cut each (0C between): each label about 23 mm for about
+      17.7 mm of content, so roughly 4-5 mm added per label
+      (``FEED_PER_LABEL_MM``, approximate; measured before the feed-scale
+      correction). Without any cut the two labels had about 61 mm blank
+      in front.
+
+    Status: ``Connection.read_status()`` (ESC i S) answers over the same
+    device connection. For a while after a job the printer reports status
+    type 6 (phase change) with phase type 1 (printing); that is normal and
+    not a hang.
+
+    Brother publishes no raster command reference for this model. The other
+    values come from Brother's PT-2730 User's Guide (Specifications, Tape
+    Cutting Options), the ``ptouch-print`` device table
+    (git.familie-radermacher.ch/linux/ptouch-print.git, ``src/libptouch.c``)
+    and the linux-usb.org ``usb.ids`` list. Where those say nothing, the
+    PT-E550W/P750W/P710BT raster reference (same 128-pin, 180 dpi head) is
+    used and the comment says "assumed".
 
     The printer must not be in Editor Lite (mass storage) mode; raster data
     only reaches it on its printer-class USB interface.
@@ -129,11 +169,12 @@ class PT2730(LabelPrinter):
     # 04F9:2041: ptouch-print's device table ("PT-2730") and usb.ids
     # ("PT-2730 P-touch Label Printer") agree; lsusb on the target host too.
     USB_PRODUCT_ID = 0x2041
-    # Assumed: TZe is laminated tape (01h), as in the PT-E550W family
-    # reference. The PT-2730's own status block (byte 11) will show it.
+    # Only the minimal command set; see LabelPrinter.LEGACY_COMMANDS.
+    LEGACY_COMMANDS = True
+    # Media type for ESC i z, which this model is never sent. Kept for
+    # completeness: the status block reports TZe as laminated (01h).
     TAPE_MEDIA_TYPE = MediaType.LAMINATED_TAPE
-    # 100-byte invalidate: PT-E550W family reference, and what
-    # ptouch-print's ptouch_init() sends to every model.
+    # 100-byte invalidate, as in the jobs verified on hardware.
     INVALIDATE_BYTES = 100
     # "Print head: 128 dot / 180 dpi" (User's Guide, Specifications).
     TOTAL_PINS = 128
@@ -141,15 +182,29 @@ class PT2730(LabelPrinter):
     RESOLUTION_DPI = 180
     # No high resolution: the specifications list 180 dpi only.
     RESOLUTION_DPI_HIGH = 0
-    # ptouch-print drives the PT-2730 uncompressed (FLAG_NONE; models that
-    # need PackBits carry FLAG_RASTER_PACKBITS). TIFF compression on this
-    # model is undocumented, so it is off by default.
+    # Uncompressed only: the M command is not sent (see LEGACY_COMMANDS).
     DEFAULT_USE_COMPRESSION = False
 
     # User's Guide cutting options: Large Margin, Small Margin, Chain,
     # No Cut, Special Tape. An automatic full cutter, no half cut.
     SUPPORTS_HALF_CUT = False
     DEFAULT_HALF_CUT = False
+    # No ESC i A (cut each N) and no ESC i K special-tape bit.
+    SUPPORTS_PAGE_NUMBER_CUTS = False
+    SUPPORTS_SPECIAL_TAPE = False
+
+    # Tape use for length estimates, measured 2026-10-07 on 24 mm TZe (no
+    # ESC i d to change any of it). See the class docstring.
+    # Feed correction, measured once 2026-10-07 (+-0.5 mm): 423 dots
+    # (59.7 mm nominal) printed 58 mm long. Stretch factor along the tape.
+    FEED_SCALE: float = 59.7 / 58
+    # Single cut label: blank before the first printed line and after the
+    # content (83 mm piece for 58 mm of content).
+    LEAD_MM: float = 24.5
+    TAIL_MM: float = 0.5
+    # Approximate, from a two-label cut-each job measured before the
+    # feed-scale correction: ~23 mm per label for ~17.7 mm of content.
+    FEED_PER_LABEL_MM: float = 5.0
 
     # TZe tape 3.5-24 mm (User's Guide, Specifications). Print areas assumed
     # from the same head in cv_pte550wp750wp710bt_eng_raster_102.pdf,
