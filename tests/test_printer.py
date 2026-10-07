@@ -959,3 +959,79 @@ class TestE550WVerifiedJobs:
             *page,
             ("print + feed", "1a"),
         ]
+
+
+def _page_commands(data: bytes, name: str) -> list[str]:
+    """Values of one command over all pages of a job."""
+    return [value for cmd, value in job_commands(data) if cmd == name]
+
+
+class TestCutEach:
+    """build_page(cut_each=N): full cut after every N labels (ESC i A n)."""
+
+    @staticmethod
+    def _label() -> Label:
+        return Label(Image.new("RGB", (20, 128), "white"), Tape24mm)
+
+    def test_default_is_one(self, mock_connection: MockConnection) -> None:
+        """Without cut_each, auto-cut pages keep ESC i A 01."""
+        page = PTE550W(mock_connection).build_page(self._label(), auto_cut=True)
+        assert _page_commands(page, "ESC i A") == ["01"]
+
+    @pytest.mark.parametrize("n", [2, 3, 55, 99])
+    def test_sets_count(self, mock_connection: MockConnection, n: int) -> None:
+        """The value is sent as the single byte of ESC i A."""
+        page = PTE550W(mock_connection).build_page(self._label(), auto_cut=True, cut_each=n)
+        assert _page_commands(page, "ESC i A") == [f"{n:02x}"]
+
+    @pytest.mark.parametrize("n", [0, 100, -1])
+    def test_out_of_range(self, mock_connection: MockConnection, n: int) -> None:
+        """The raster reference allows 1-99."""
+        with pytest.raises(ValueError, match="between 1 and 99"):
+            PTE550W(mock_connection).build_page(self._label(), auto_cut=True, cut_each=n)
+
+    def test_not_an_integer(self, mock_connection: MockConnection) -> None:
+        """Booleans and floats are refused, not truncated."""
+        printer = PTE550W(mock_connection)
+        for bad in (True, 2.0):
+            with pytest.raises(ValueError, match="integer"):
+                printer.build_page(self._label(), auto_cut=True, cut_each=bad)  # type: ignore[arg-type]
+
+    def test_needs_auto_cut(self, mock_connection: MockConnection) -> None:
+        """ESC i A is only sent with auto cut, so cut_each > 1 without it is an error."""
+        with pytest.raises(ValueError, match="auto cut"):
+            PTE550W(mock_connection).build_page(self._label(), auto_cut=False, cut_each=2)
+
+    def test_one_without_auto_cut_is_fine(self, mock_connection: MockConnection) -> None:
+        """The default stays valid on strips (auto cut off, no ESC i A)."""
+        page = PTE550W(mock_connection).build_page(self._label(), auto_cut=False)
+        assert _page_commands(page, "ESC i A") == []
+
+
+class TestChainedPage:
+    """build_page(chain=True): ESC i K without the no-chain bit (0x08)."""
+
+    @staticmethod
+    def _label() -> Label:
+        return Label(Image.new("RGB", (20, 128), "white"), Tape24mm)
+
+    def test_chained_page_clears_bit_3(self, mock_connection: MockConnection) -> None:
+        """Chain, half cut, auto cut: K = 04 (half cut only)."""
+        page = PTE550W(mock_connection).build_page(
+            self._label(), auto_cut=True, half_cut=True, chain=True
+        )
+        (k,) = _page_commands(page, "ESC i K")
+        assert int(k, 16) & 0x08 == 0
+        assert k == "04"
+
+    def test_unchained_page_sets_bit_3(self, mock_connection: MockConnection) -> None:
+        """The same page without chain: K = 0c."""
+        page = PTE550W(mock_connection).build_page(
+            self._label(), auto_cut=True, half_cut=True, chain=False
+        )
+        assert _page_commands(page, "ESC i K") == ["0c"]
+
+    def test_chained_page_still_ends_with_feed(self, mock_connection: MockConnection) -> None:
+        """Chain only drops the final cut; the last page still ends with 1A."""
+        page = PTE550W(mock_connection).build_page(self._label(), chain=True, feed=True)
+        assert job_commands(page)[-1] == ("print + feed", "1a")
