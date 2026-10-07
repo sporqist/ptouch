@@ -901,6 +901,95 @@ class LabelPrinter(ABC):
 
         return control_seq + raster_data + print_cmd
 
+    def preamble(self) -> bytes:
+        """Invalidate and initialize (``00`` x n, ``ESC @``) for a new connection.
+
+        Written once when the printer object is created. Callers that build
+        jobs with :meth:`build_job` and send them over their own connection
+        send this once before the first job of a run.
+        """
+        return self._cmd_invalidate_and_initialize()
+
+    def build_job(
+        self,
+        labels: list[Label],
+        *,
+        cut_each: int = 1,
+        chain: bool = False,
+        half_cut: bool = False,
+        auto_cut: bool = True,
+        high_resolution_image: bool = False,
+        margin_mm: float | None = None,
+    ) -> bytes:
+        """Build a whole job with identical settings on every page.
+
+        A PT-E550W cuts fully after every label when the cut settings change
+        between the pages of a job, so every page here gets the same auto
+        cut, cut-each, half cut, chain, resolution and margin. Only the
+        starting-page flag and the final ``1A`` (feed) differ. The job is
+        checked with :func:`~ptouch.validate.validate_job` before it is
+        returned; it does not include :meth:`preamble`.
+
+        Parameters
+        ----------
+        labels : list[Label]
+            The labels (pages), all on the same tape.
+        cut_each : int, default 1
+            With auto cut: full cut after every ``cut_each`` labels. The
+            number of labels must be a multiple of it.
+        chain : bool, default False
+            Chain printing: no feed and full cut after the last label, so
+            the next job continues on the same strip without a lead.
+        half_cut : bool, default False
+            Half cut between labels.
+        auto_cut : bool, default True
+            Auto cut (``ESC i M`` bit 6).
+        high_resolution_image : bool, default False
+            The images are at ``RESOLUTION_DPI_HIGH`` along the tape (see
+            :meth:`build_page`).
+        margin_mm : float or None, optional
+            Margin; defaults to ``DEFAULT_MARGIN_MM``.
+
+        Returns
+        -------
+        bytes
+            The job's pages.
+
+        Raises
+        ------
+        ValueError
+            If there are no labels, the tapes differ, the number of labels
+            is not a multiple of ``cut_each``, or a page option is invalid
+            (see :meth:`build_page`).
+        InvalidJobError
+            If the built job does not validate (a bug, never sent).
+        """
+        if not labels:
+            raise ValueError("At least one label is required")
+        tape_type = type(labels[0].tape)
+        if any(not isinstance(label.tape, tape_type) for label in labels):
+            raise ValueError("All labels of a job must use the same tape type")
+        self._check_cut_each(cut_each, auto_cut)
+        if auto_cut and len(labels) % cut_each:
+            raise ValueError(f"{len(labels)} labels is not a multiple of cut_each {cut_each}")
+        pages = [
+            self.build_page(
+                label,
+                margin_mm=margin_mm,
+                feed=i == len(labels) - 1,
+                first_page=i == 0,
+                auto_cut=auto_cut,
+                half_cut=half_cut,
+                chain=chain,
+                cut_each=cut_each,
+                high_resolution_image=high_resolution_image,
+            )
+            for i, label in enumerate(labels)
+        ]
+        job = b"".join(pages)
+        validate_job(job, self, max_pages=self.max_pages)
+        return job
+
     def print(
         self,
         label: Label,
