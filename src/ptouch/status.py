@@ -77,7 +77,8 @@ MEDIA_TYPES = {
     0x11: "heat-shrink tube 2:1", 0x17: "heat-shrink tube 3:1", 0xFF: "incompatible tape",
 }  # fmt: skip
 
-MODEL_CODES = {0x66: "PT-E550W", 0x68: "PT-P750W"}
+# 63h: read from a PT-2730 on 2026-10-07 (not in a Brother reference).
+MODEL_CODES = {0x63: "PT-2730", 0x66: "PT-E550W", 0x68: "PT-P750W"}
 
 
 @dataclass(frozen=True)

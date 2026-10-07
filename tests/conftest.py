@@ -89,7 +89,7 @@ def tape_36mm() -> Tape36mm:
 
 # ---- reading a print job back as a list of commands ------------------------
 
-_ESC_I_SIZES = {b"a": 1, b"z": 10, b"M": 1, b"A": 1, b"K": 1, b"d": 2}
+_ESC_I_SIZES = {b"a": 1, b"R": 1, b"z": 10, b"M": 1, b"A": 1, b"K": 1, b"d": 2}
 
 
 def _raster_run(data: bytes, i: int, compressed: bool) -> tuple[int, int, int]:
@@ -134,16 +134,16 @@ def _one_command(data: bytes, i: int, compressed: bool) -> tuple[int, tuple[str,
     raise AssertionError(f"unexpected byte {data[i]:#04x} at {i}")
 
 
-def job_commands(data: bytes) -> list[tuple[str, str]]:
+def job_commands(data: bytes, compressed: bool = True) -> list[tuple[str, str]]:
     """Read a raster print job back as readable (command, value) pairs.
 
     Raster lines between two commands are summarised as one entry; they
     are read as PackBits after ``M 02`` and as plain 16-byte lines after
-    ``M 00``.
+    ``M 00``. Before any ``M``, ``compressed`` decides (False for jobs of
+    printers with ``LEGACY_COMMANDS``, which never send ``M``).
     """
     out: list[tuple[str, str]] = []
     i = 0
-    compressed = True
     while i < len(data):
         i, cmd = _one_command(data, i, compressed)
         if cmd[0] == "compression":

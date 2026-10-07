@@ -396,8 +396,8 @@ def main() -> int:  # noqa: C901 - pre-existing, inherited from upstream
             return 1
 
     # Create printer
-    # The PT-2730 is only known to print uncompressed (see PT2730).
-    use_compression = not (args.no_compression or printer_class is PT2730)
+    # Legacy-command printers (PT-2730) take no compression.
+    use_compression = not (args.no_compression or printer_class.LEGACY_COMMANDS)
     printer = printer_class(
         connection,
         use_compression=use_compression,
