@@ -111,6 +111,60 @@ class PTP710BT(PTE550W):
     }
 
 
+class PT2730(LabelPrinter):
+    """Brother PT-2730 label printer (128 pins, 180 DPI, USB only).
+
+    Not yet verified on hardware. Brother publishes no raster command
+    reference for this model. The values below come from Brother's PT-2730
+    User's Guide (Specifications, Tape Cutting Options), the ``ptouch-print``
+    device table (git.familie-radermacher.ch/linux/ptouch-print.git,
+    ``src/libptouch.c``) and the linux-usb.org ``usb.ids`` list. Where those
+    say nothing, the PT-E550W/P750W/P710BT raster reference (same 128-pin,
+    180 dpi head) is used and the comment says "assumed".
+
+    The printer must not be in Editor Lite (mass storage) mode; raster data
+    only reaches it on its printer-class USB interface.
+    """
+
+    # 04F9:2041: ptouch-print's device table ("PT-2730") and usb.ids
+    # ("PT-2730 P-touch Label Printer") agree; lsusb on the target host too.
+    USB_PRODUCT_ID = 0x2041
+    # Assumed: TZe is laminated tape (01h), as in the PT-E550W family
+    # reference. The PT-2730's own status block (byte 11) will show it.
+    TAPE_MEDIA_TYPE = MediaType.LAMINATED_TAPE
+    # 100-byte invalidate: PT-E550W family reference, and what
+    # ptouch-print's ptouch_init() sends to every model.
+    INVALIDATE_BYTES = 100
+    # "Print head: 128 dot / 180 dpi" (User's Guide, Specifications).
+    TOTAL_PINS = 128
+    BYTES_PER_LINE = 16
+    RESOLUTION_DPI = 180
+    # No high resolution: the specifications list 180 dpi only.
+    RESOLUTION_DPI_HIGH = 0
+    # ptouch-print drives the PT-2730 uncompressed (FLAG_NONE; models that
+    # need PackBits carry FLAG_RASTER_PACKBITS). TIFF compression on this
+    # model is undocumented, so it is off by default.
+    DEFAULT_USE_COMPRESSION = False
+
+    # User's Guide cutting options: Large Margin, Small Margin, Chain,
+    # No Cut, Special Tape. An automatic full cutter, no half cut.
+    SUPPORTS_HALF_CUT = False
+    DEFAULT_HALF_CUT = False
+
+    # TZe tape 3.5-24 mm (User's Guide, Specifications). Print areas assumed
+    # from the same head in cv_pte550wp750wp710bt_eng_raster_102.pdf,
+    # section 2.3 "Print Area". ptouch-print's table has slightly wider
+    # areas (9 mm 52, 12 mm 76, 18 mm 120 pins); Brother's figures win.
+    PIN_CONFIGS = {
+        Tape3_5mm: TapeConfig(left_pins=52, print_pins=24, right_pins=52),
+        Tape6mm: TapeConfig(left_pins=48, print_pins=32, right_pins=48),
+        Tape9mm: TapeConfig(left_pins=39, print_pins=50, right_pins=39),
+        Tape12mm: TapeConfig(left_pins=29, print_pins=70, right_pins=29),
+        Tape18mm: TapeConfig(left_pins=8, print_pins=112, right_pins=8),
+        Tape24mm: TapeConfig(left_pins=0, print_pins=128, right_pins=0),
+    }
+
+
 class PTP900Series(LabelPrinter):
     """Base class for Brother PT-P900 series printers (560 pins, 360 DPI).
 

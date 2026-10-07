@@ -15,8 +15,8 @@ A Python library for Brother P-touch label printers.
 
 ## Features
 
-- Support for Brother P-touch label printers (PT-E550W, PT-P710BT, PT-P750W, PT-P900, PT-P900W, PT-P910BT, PT-P950NW)
-- Network (TCP/IP) and USB connections
+- Support for Brother P-touch label printers (PT-2730, PT-E550W, PT-P710BT, PT-P750W, PT-P900, PT-P900W, PT-P910BT, PT-P950NW)
+- Network (TCP/IP) and USB connections (pyusb, or a device file such as `/dev/usb/lp0`)
 - Text labels with customizable fonts and alignment
 - Image label printing
 - Multi-label printing with half-cut support (saves tape)
@@ -54,6 +54,7 @@ Comprehensive documentation is available at [ptouch.readthedocs.io](https://ptou
 
 | Printer | Resolution | High-Res | Pins | Max Tape Width | Class |
 |---------|------------|----------|------|----------------|-------|
+| PT-2730 (not yet verified on hardware) | 180 DPI | - | 128 | 24mm | `PT2730` |
 | PT-E550W | 180 DPI | 360 DPI | 128 | 24mm | `PTE550W` |
 | PT-P710BT | 180 DPI | 360 DPI | 128 | 24mm | `PTP710BT` |
 | PT-P750W | 180 DPI | 360 DPI | 128 | 24mm | `PTP750W` |
@@ -61,6 +62,20 @@ Comprehensive documentation is available at [ptouch.readthedocs.io](https://ptou
 | PT-P900W | 360 DPI | 720 DPI | 560 | 36mm | `PTP900W` |
 | PT-P910BT | 360 DPI | 720 DPI | 560 | 36mm | `PTP910BT` |
 | PT-P950NW | 360 DPI | 720 DPI | 560 | 36mm | `PTP950NW` |
+
+> **PT-2730 hardware notes (not yet verified on hardware):** USB only
+> (04F9:2041), TZe tape up to 24 mm, automatic full cutter, no half cut
+> and no high resolution. Brother publishes no raster command reference for
+> it; the class follows the PT-2730 User's Guide, ptouch-print's device
+> table and the PT-E550W family reference (see `PT2730` in
+> `src/ptouch/printers.py` for which value comes from where). Jobs are sent
+> uncompressed, as ptouch-print does. Turn **Editor Lite** (mass storage
+> mode) off before printing: in that mode the printer shows up as a USB
+> drive and does not take raster data. On Linux the `usblp` driver offers
+> the printer as `/dev/usb/lp0`; `ConnectionDevice("/dev/usb/lp0")` prints
+> through it without libusb (the user needs access to the node, usually the
+> `lp` group). ptouch-print notes that the PT-2730 was reported to need
+> some blank space before the content; check the first label's leading edge.
 
 > **Note:** The PT-P710BT is a basic consumer model and does **not** support half-cut or heat shrink tubes. Its firmware ignores the half-cut command, so use `--full-cut` for multi-label jobs to get a cut between labels.
 
@@ -254,6 +269,20 @@ label = TextLabel(
 printer.print(label)
 ```
 
+#### Device File (Linux usblp)
+
+```python
+from ptouch import ConnectionDevice, PT2730, TextLabel, Tape24mm
+
+connection = ConnectionDevice("/dev/usb/lp0")  # or "file:///dev/usb/lp0"
+printer = PT2730(connection)
+print(connection.read_status().tape)  # ESC i S, 32-byte reply
+printer.print(TextLabel("Device file", Tape24mm, font="/path/to/font.ttf"))
+```
+
+`read_status()` (send `ESC i S`, read the 32-byte block with a timeout)
+works on USB connections too, `ConnectionUSB` and `ConnectionDevice`.
+
 #### Multi-Label Printing
 
 Print multiple labels in a single job with half-cuts between labels to save tape:
@@ -314,8 +343,8 @@ Note: `Align` is also available as a backwards-compatible alias at package level
 ## CLI Options
 
 ```
-usage: ptouch [-h] [--image FILE] (--host IP | --usb)
-              --printer {E550W,P710BT,P750W,P900,P900W,P910BT,P950NW}
+usage: ptouch [-h] [--image FILE] (--host IP | --usb | --device PATH)
+              --printer {2730,E550W,P710BT,P750W,P900,P900W,P910BT,P950NW}
               --tape-width {3.5,6,9,12,18,24,36} [--font PATH] [--font-size PX]
               [--align H V] [--high-resolution] [--margin MM] [--no-compression]
               [--full-cut] [--precut] [--copies N] [--width MM] [text ...]
@@ -328,6 +357,7 @@ options:
   --image, -i FILE      Image file to print instead of text
   --host, -H IP         Printer IP address for network connection
   --usb                 Use USB connection
+  --device PATH         Printer device file, e.g. /dev/usb/lp0
   --printer, -p         Printer model
   --tape-width, -t      Tape width in mm
   --font, -f PATH       Path to TrueType font file (uses PIL default if not specified)

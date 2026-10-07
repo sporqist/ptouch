@@ -4,12 +4,20 @@
 
 """Tests for the ptouch.connection module."""
 
+import errno
+import os
 import socket
+import sys
+import threading
+import time
+from collections.abc import Iterator
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
 
 from ptouch.connection import (
+    ConnectionDevice,
     ConnectionNetwork,
     ConnectionUSB,
     PrinterConnectionError,
@@ -579,3 +587,168 @@ class TestPyusbLazyImport:
         import ptouch.connection as conn_mod
 
         assert conn_mod._HAS_PYUSB is True
+
+
+# A status block as the PT-E550W family sends it (24 mm laminated, black on
+# white); the layout is the same over USB and SNMP.
+STATUS_24MM = bytes.fromhex(
+    "80 20 42 30 66 30 04 00 00 00 18 01 00 00 00 0000 00 00 00 00 00 00 00 01 08 00 00 00 00 00 00"
+)
+
+
+def _usb_connection(ep_in: MagicMock) -> tuple[ConnectionUSB, MagicMock]:
+    """Wire a ConnectionUSB to fake endpoints (no USB device involved)."""
+    conn = ConnectionUSB()
+    ep_out = MagicMock()
+    ep_out.write.side_effect = lambda data, timeout: len(data)
+    conn._ep_in, conn._ep_out = ep_in, ep_out
+    return conn, ep_out
+
+
+class TestConnectionUSBReadStatus:
+    """ESC i S over USB, read back from the bulk IN endpoint."""
+
+    def test_reads_32_bytes(self) -> None:
+        """The request goes out, the block comes back in two pieces."""
+        ep_in = MagicMock()
+        ep_in.read.side_effect = [STATUS_24MM[:20], STATUS_24MM[20:]]
+        conn, ep_out = _usb_connection(ep_in)
+        status = conn.read_status(timeout=1.0)
+        ep_out.write.assert_called_once_with(b"\x1biS", timeout=5000)
+        assert ep_in.read.call_args_list[0].args == (32,)
+        assert ep_in.read.call_args_list[1].args == (12,)
+        assert status.tape == "24 mm laminated tape, black on white"
+
+    def test_empty_reads_are_retried(self) -> None:
+        """Zero-length reads before the reply do not end the wait."""
+        ep_in = MagicMock()
+        ep_in.read.side_effect = [b"", b"", STATUS_24MM]
+        conn, _ = _usb_connection(ep_in)
+        assert conn.read_status(timeout=1.0).media_width_mm == 24
+
+    def test_timeout(self) -> None:
+        """No reply: PrinterTimeoutError after the timeout."""
+        import usb.core
+
+        ep_in = MagicMock()
+        ep_in.read.side_effect = usb.core.USBTimeoutError("timeout")
+        conn, _ = _usb_connection(ep_in)
+        with pytest.raises(PrinterTimeoutError, match="0 of 32"):
+            conn.read_status(timeout=0.1)
+
+    def test_not_connected(self) -> None:
+        """Reading before connect() is a connection error."""
+        conn, _ = _usb_connection(MagicMock())
+        conn._ep_in = None
+        with pytest.raises(PrinterConnectionError, match="Not connected"):
+            conn.read_status(timeout=0.1)
+
+
+class TestConnectionDeviceOpen:
+    """Opening a device file: errors map to the printer exceptions."""
+
+    def test_file_uri(self) -> None:
+        """file:///dev/usb/lp0 and /dev/usb/lp0 name the same file."""
+        assert ConnectionDevice("file:///dev/usb/lp0").path == "/dev/usb/lp0"
+        assert ConnectionDevice("/dev/usb/lp0").path == "/dev/usb/lp0"
+
+    def test_missing_device(self, tmp_path: Path) -> None:
+        """ENOENT: PrinterNotFoundError."""
+        conn = ConnectionDevice(str(tmp_path / "lp0"))
+        with pytest.raises(PrinterNotFoundError, match="not found"):
+            conn.connect(MockPrinter())  # type: ignore[arg-type]
+
+    @pytest.mark.parametrize("code", [errno.EACCES, errno.EPERM])
+    def test_permission_denied(self, code: int) -> None:
+        """EACCES / EPERM: PrinterPermissionError."""
+        with patch("os.open", side_effect=OSError(code, os.strerror(code))):
+            with pytest.raises(PrinterPermissionError, match="lp"):
+                ConnectionDevice("/dev/usb/lp0").connect(MockPrinter())  # type: ignore[arg-type]
+
+    def test_busy(self) -> None:
+        """Other errors (EBUSY): PrinterConnectionError."""
+        with patch("os.open", side_effect=OSError(errno.EBUSY, os.strerror(errno.EBUSY))):
+            with pytest.raises(PrinterConnectionError) as exc_info:
+                ConnectionDevice("/dev/usb/lp0").connect(MockPrinter())  # type: ignore[arg-type]
+        assert type(exc_info.value) is PrinterConnectionError
+
+    def test_not_connected(self) -> None:
+        """Writing before connect() is a connection error."""
+        with pytest.raises(PrinterConnectionError, match="Not connected"):
+            ConnectionDevice("/dev/usb/lp0").write(b"\x1b@")
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="needs a POSIX pseudo-terminal")
+class TestConnectionDevicePty:
+    """A pseudo-terminal in raw mode stands in for /dev/usb/lp0."""
+
+    @pytest.fixture
+    def pty_pair(self) -> Iterator[tuple[int, str]]:
+        """(printer side fd, device path the connection opens)."""
+        import pty
+        import tty
+
+        printer_fd, device_fd = pty.openpty()
+        tty.setraw(device_fd)  # no line discipline: bytes pass unchanged
+        try:
+            yield printer_fd, os.ttyname(device_fd)
+        finally:
+            os.close(printer_fd)
+            os.close(device_fd)
+
+    @staticmethod
+    def _received(fd: int, n: int) -> bytes:
+        data = b""
+        while len(data) < n:
+            data += os.read(fd, n - len(data))
+        return data
+
+    def test_write(self, pty_pair: tuple[int, str]) -> None:
+        """The job arrives on the printer side byte for byte."""
+        printer_fd, path = pty_pair
+        conn = ConnectionDevice(path)
+        conn.connect(MockPrinter())  # type: ignore[arg-type]
+        job = bytes(range(256)) * 4
+        conn.write(job)
+        assert self._received(printer_fd, len(job)) == job
+        conn.close()
+
+    def test_read_status(self, pty_pair: tuple[int, str]) -> None:
+        """ESC i S goes out; a reply sent in two pieces is put together."""
+        printer_fd, path = pty_pair
+        conn = ConnectionDevice(path)
+        conn.connect(MockPrinter())  # type: ignore[arg-type]
+
+        def printer() -> None:
+            assert self._received(printer_fd, 3) == b"\x1biS"
+            os.write(printer_fd, STATUS_24MM[:10])
+            time.sleep(0.05)
+            os.write(printer_fd, STATUS_24MM[10:])
+
+        thread = threading.Thread(target=printer)
+        thread.start()
+        status = conn.read_status(timeout=2.0)
+        thread.join()
+        assert status.raw == STATUS_24MM
+        assert status.tape == "24 mm laminated tape, black on white"
+        conn.close()
+
+    def test_read_status_timeout(self, pty_pair: tuple[int, str]) -> None:
+        """No reply: PrinterTimeoutError, not a hang."""
+        _, path = pty_pair
+        conn = ConnectionDevice(path)
+        conn.connect(MockPrinter())  # type: ignore[arg-type]
+        start = time.monotonic()
+        with pytest.raises(PrinterTimeoutError, match="0 of 32"):
+            conn.read_status(timeout=0.2)
+        assert time.monotonic() - start < 1.0
+        conn.close()
+
+    def test_read_timeout(self, pty_pair: tuple[int, str]) -> None:
+        """read() with nothing to read times out."""
+        _, path = pty_pair
+        conn = ConnectionDevice(path, timeout=0.1)
+        conn.connect(MockPrinter())  # type: ignore[arg-type]
+        with pytest.raises(PrinterTimeoutError):
+            conn.read()
+        conn.close()

@@ -7,9 +7,14 @@
 from __future__ import annotations
 
 import errno
+import os
+import select
 import socket
+import time
 from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, Any
+
+from .status import STATUS_LENGTH, PrinterStatus, parse_status
 
 # pyusb is declared as an optional `[usb]` extra in pyproject.toml. Importing
 # it at module load time makes the entire library unusable for network-only
@@ -30,6 +35,10 @@ if TYPE_CHECKING:
 
 # USB vendor ID for Brother Industries
 USB_VENDOR_ID = 0x04F9
+
+# ESC i S, "Status information request" in Brother's raster command
+# references; the printer answers with the 32-byte status block.
+STATUS_REQUEST = b"\x1biS"
 
 
 def parse_usb_uri(uri: str) -> tuple[int | None, int | None, str | None]:
@@ -199,6 +208,56 @@ class Connection(ABC):
             If the connection does not support reading.
         """
         raise NotImplementedError("This connection does not support reading")
+
+    def _read_some(self, num_bytes: int, timeout: float) -> bytes:
+        """Read up to ``num_bytes``, waiting at most ``timeout`` seconds.
+
+        Returns ``b""`` when nothing arrived in time. Connections that can
+        read a status reply override this.
+        """
+        raise NotImplementedError(f"{type(self).__name__} cannot read a status reply")
+
+    def read_status(self, timeout: float = 2.0) -> PrinterStatus:
+        """Request the printer status (``ESC i S``) and read the 32-byte reply.
+
+        Works on connections that read back from the printer (USB and
+        device files). Network printers do not answer on the print port;
+        use :func:`ptouch.snmp.read_status` for those.
+
+        Parameters
+        ----------
+        timeout : float, default 2.0
+            Seconds to wait for the whole reply.
+
+        Returns
+        -------
+        PrinterStatus
+            The decoded status block.
+
+        Raises
+        ------
+        PrinterTimeoutError
+            If the reply is not complete within ``timeout``.
+        StatusError
+            If the reply is not a status block.
+        NotImplementedError
+            If the connection cannot read.
+        """
+        self.write(STATUS_REQUEST)
+        deadline = time.monotonic() + timeout
+        reply = b""
+        while len(reply) < STATUS_LENGTH:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise PrinterTimeoutError(
+                    f"printer sent {len(reply)} of {STATUS_LENGTH} status bytes within {timeout}s"
+                )
+            chunk = self._read_some(STATUS_LENGTH - len(reply), remaining)
+            if not chunk:
+                # Some printers answer empty reads at once; do not spin.
+                time.sleep(min(0.05, max(0.0, deadline - time.monotonic())))
+            reply += chunk
+        return parse_status(reply)
 
     def __del__(self) -> None:
         """Clean up connection on garbage collection."""
@@ -404,6 +463,28 @@ class ConnectionUSB(Connection):
                 original_error=last_error,
             )
 
+    def read(self, num_bytes: int = 1024) -> bytes:
+        """Read from the printer's bulk IN endpoint (waits up to 5 s).
+
+        Raises
+        ------
+        PrinterConnectionError
+            If not connected or the USB read fails.
+        """
+        return self._read_some(num_bytes, 5.0)
+
+    def _read_some(self, num_bytes: int, timeout: float) -> bytes:
+        """Read up to ``num_bytes`` from the IN endpoint; ``b""`` on timeout."""
+        if self._ep_in is None:
+            raise PrinterConnectionError("Not connected to printer")
+        try:
+            data = self._ep_in.read(num_bytes, timeout=max(1, int(timeout * 1000)))
+        except usb.core.USBTimeoutError:
+            return b""
+        except usb.core.USBError as e:
+            raise PrinterConnectionError(f"USB read failed: {e}", original_error=e) from e
+        return bytes(data)
+
     def close(self) -> None:
         """Close USB connection and reattach kernel driver if needed."""
         if self._device is not None:
@@ -414,6 +495,135 @@ class ConnectionUSB(Connection):
                 except usb.core.USBError:
                     pass  # Ignore errors when reattaching kernel driver
             self._device = None
+
+
+_NOT_FOUND_ERRNOS = (errno.ENOENT, errno.ENODEV, errno.ENXIO)
+_PERMISSION_ERRNOS = (errno.EACCES, errno.EPERM)
+
+
+class ConnectionDevice(Connection):
+    """Printer device file, e.g. ``/dev/usb/lp0`` of the Linux ``usblp`` driver.
+
+    Writes jobs to and reads status replies from the device node, with no
+    libusb and without detaching the kernel driver. The file is opened
+    read-write and non-blocking; reads and writes wait with ``select``,
+    so this needs a POSIX system.
+
+    Parameters
+    ----------
+    path : str
+        Device file, or a ``file://`` URI of one (``file:///dev/usb/lp0``).
+    timeout : float, default 5.0
+        Seconds a write may make no progress, and the default wait for
+        :meth:`read`.
+    """
+
+    def __init__(self, path: str, timeout: float = 5.0) -> None:
+        self._fd: int | None = None
+        self.path = path.removeprefix("file://")
+        self.timeout = timeout
+
+    def connect(self, printer: LabelPrinter) -> None:
+        """Open the device file.
+
+        Raises
+        ------
+        PrinterNotFoundError
+            If the device file does not exist (or its device is gone).
+        PrinterPermissionError
+            If the user may not open it (e.g. not in the ``lp`` group).
+        PrinterConnectionError
+            On any other error, e.g. the device is busy.
+        """
+        del printer  # unused for device files
+        flags = os.O_RDWR | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_NOCTTY", 0)
+        try:
+            self._fd = os.open(self.path, flags)
+        except OSError as e:
+            if e.errno in _NOT_FOUND_ERRNOS:
+                raise PrinterNotFoundError(
+                    f"Printer device {self.path} not found. "
+                    "Check if the printer is connected and powered on.",
+                    original_error=e,
+                ) from e
+            if e.errno in _PERMISSION_ERRNOS:
+                raise PrinterPermissionError(
+                    f"Permission denied opening {self.path}. "
+                    "Add the user to the device's group (usually lp).",
+                    original_error=e,
+                ) from e
+            raise PrinterConnectionError(
+                f"Failed to open printer device {self.path}: {e}", original_error=e
+            ) from e
+
+    def _require_fd(self) -> int:
+        if self._fd is None:
+            raise PrinterConnectionError("Not connected to printer")
+        return self._fd
+
+    def write(self, payload: bytes) -> None:
+        """Write all of ``payload`` to the device.
+
+        Raises
+        ------
+        PrinterTimeoutError
+            If the device accepts nothing for ``timeout`` seconds.
+        PrinterWriteError
+            If the write fails.
+        """
+        fd = self._require_fd()
+        remaining = memoryview(payload)
+        while remaining:
+            _, writable, _ = select.select([], [fd], [], self.timeout)
+            if not writable:
+                written = len(payload) - len(remaining)
+                raise PrinterTimeoutError(
+                    f"Write to {self.path} stalled: {written}/{len(payload)} bytes "
+                    f"written in {self.timeout}s"
+                )
+            try:
+                n = os.write(fd, remaining)
+            except BlockingIOError:
+                continue
+            except OSError as e:
+                raise PrinterWriteError(
+                    f"Write to {self.path} failed: {e}", original_error=e
+                ) from e
+            remaining = remaining[n:]
+
+    def _read_some(self, num_bytes: int, timeout: float) -> bytes:
+        """Read up to ``num_bytes``; ``b""`` if nothing arrives in ``timeout``."""
+        fd = self._require_fd()
+        readable, _, _ = select.select([fd], [], [], timeout)
+        if not readable:
+            return b""
+        try:
+            return os.read(fd, num_bytes)
+        except BlockingIOError:
+            return b""
+        except OSError as e:
+            raise PrinterConnectionError(
+                f"Read from {self.path} failed: {e}", original_error=e
+            ) from e
+
+    def read(self, num_bytes: int = 1024) -> bytes:
+        """Read what the printer sent, waiting up to ``timeout`` seconds.
+
+        Raises
+        ------
+        PrinterTimeoutError
+            If nothing arrives in time.
+        """
+        data = self._read_some(num_bytes, self.timeout)
+        if not data:
+            raise PrinterTimeoutError(f"Read from {self.path} timed out")
+        return data
+
+    def close(self) -> None:
+        """Close the device file."""
+        if self._fd is not None:
+            os.close(self._fd)
+            self._fd = None
 
 
 class ConnectionNetwork(Connection):
